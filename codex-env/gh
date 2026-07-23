@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+token_file="${GITHUB_TOKEN_FILE:-/var/run/edka/github/token}"
+if [[ ! -s "${token_file}" ]]; then
+    echo "GitHub token file is missing or empty" >&2
+    exit 1
+fi
+
+GH_TOKEN="$(tr -d '\r\n' <"${token_file}")"
+export GH_TOKEN
+exec /usr/bin/gh "$@"

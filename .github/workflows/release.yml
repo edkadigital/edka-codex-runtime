@@ -1,0 +1,404 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: codex-runtime-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CODEX_ENV_IMAGE: ghcr.io/edkaio/edka-codex-env
+  CODEX_PROXY_IMAGE: ghcr.io/edkaio/edka-codex-proxy
+
+jobs:
+  prepare:
+    name: Validate release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      runtime_version: ${{ steps.versions.outputs.runtime_version }}
+      codex_version: ${{ steps.versions.outputs.codex_version }}
+      codex_sha256_amd64: ${{ steps.versions.outputs.codex_sha256_amd64 }}
+      codex_sha256_arm64: ${{ steps.versions.outputs.codex_sha256_arm64 }}
+      gh_version: ${{ steps.versions.outputs.gh_version }}
+      gh_sha256_amd64: ${{ steps.versions.outputs.gh_sha256_amd64 }}
+      gh_sha256_arm64: ${{ steps.versions.outputs.gh_sha256_arm64 }}
+      release_needed: ${{ steps.images.outputs.release_needed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate release versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          source runtime.env
+          if [[ ! "${RUNTIME_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-edka\.[0-9]+$ ]]; then
+            echo "::error::RUNTIME_VERSION must use <codex-version>-edka.<revision>"
+            exit 1
+          fi
+          if [[ ! "${CODEX_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::CODEX_VERSION must be a complete semantic version"
+            exit 1
+          fi
+          if [[ ! "${GH_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::GH_VERSION must be a complete semantic version"
+            exit 1
+          fi
+          if [[ "${RUNTIME_VERSION}" != "${CODEX_VERSION}-edka."* ]]; then
+            echo "::error::RUNTIME_VERSION must identify the CODEX_VERSION compatibility line"
+            exit 1
+          fi
+          for checksum in \
+            "${CODEX_SHA256_AMD64}" \
+            "${CODEX_SHA256_ARM64}" \
+            "${GH_SHA256_AMD64}" \
+            "${GH_SHA256_ARM64}"; do
+            if [[ ! "${checksum}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Runtime artifact checksums must be lowercase SHA-256 values"
+              exit 1
+            fi
+          done
+          if [[ "${GITHUB_REF_NAME}" != "v${RUNTIME_VERSION}" ]]; then
+            echo "::error::Release tag must be v${RUNTIME_VERSION}"
+            exit 1
+          fi
+          {
+            echo "runtime_version=${RUNTIME_VERSION}"
+            echo "codex_version=${CODEX_VERSION}"
+            echo "codex_sha256_amd64=${CODEX_SHA256_AMD64}"
+            echo "codex_sha256_arm64=${CODEX_SHA256_ARM64}"
+            echo "gh_version=${GH_VERSION}"
+            echo "gh_sha256_amd64=${GH_SHA256_AMD64}"
+            echo "gh_sha256_arm64=${GH_SHA256_ARM64}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: codex-proxy/go.mod
+          cache-dependency-path: codex-proxy/go.sum
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l codex-proxy)"
+          (
+            cd codex-proxy
+            go test ./...
+            go vet ./...
+          )
+          bash -n \
+            codex-env/clone.sh \
+            codex-env/entrypoint.sh \
+            codex-env/gh \
+            codex-env/git-askpass-edka \
+            codex-env/git-credential-edka \
+            codex-env/scripts_test.sh
+          codex-env/scripts_test.sh
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check immutable bundle tags
+        id: images
+        shell: bash
+        env:
+          RUNTIME_VERSION: ${{ steps.versions.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          env_exists=false
+          proxy_exists=false
+          if docker buildx imagetools inspect \
+            "${CODEX_ENV_IMAGE}:${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            env_exists=true
+          fi
+          if docker buildx imagetools inspect \
+            "${CODEX_PROXY_IMAGE}:${RUNTIME_VERSION}" >/dev/null 2>&1; then
+            proxy_exists=true
+          fi
+          if [[ "${env_exists}" != "${proxy_exists}" ]]; then
+            echo "::error::Only one image exists for ${RUNTIME_VERSION}; refusing a partial bundle"
+            exit 1
+          fi
+          if [[ "${env_exists}" == "true" ]]; then
+            echo "release_needed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "release_needed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+  build:
+    name: Publish ${{ matrix.component }} (${{ matrix.arch }})
+    if: needs.prepare.outputs.release_needed == 'true'
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - component: codex-env
+            image: ghcr.io/edkaio/edka-codex-env
+            arch: amd64
+            platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2204
+          - component: codex-env
+            image: ghcr.io/edkaio/edka-codex-env
+            arch: arm64
+            platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
+          - component: codex-proxy
+            image: ghcr.io/edkaio/edka-codex-proxy
+            arch: amd64
+            platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2204
+          - component: codex-proxy
+            image: ghcr.io/edkaio/edka-codex-proxy
+            arch: arm64
+            platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Docker Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Codex environment by digest
+        id: env
+        if: matrix.component == 'codex-env'
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ./codex-env
+          file: ./codex-env/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          sbom: false
+          build-args: |
+            CODEX_VERSION=${{ needs.prepare.outputs.codex_version }}
+            CODEX_SHA256_AMD64=${{ needs.prepare.outputs.codex_sha256_amd64 }}
+            CODEX_SHA256_ARM64=${{ needs.prepare.outputs.codex_sha256_arm64 }}
+            GH_VERSION=${{ needs.prepare.outputs.gh_version }}
+            GH_SHA256_AMD64=${{ needs.prepare.outputs.gh_sha256_amd64 }}
+            GH_SHA256_ARM64=${{ needs.prepare.outputs.gh_sha256_arm64 }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.runtime_version }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Build and push Codex proxy by digest
+        id: proxy
+        if: matrix.component == 'codex-proxy'
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ./codex-proxy
+          file: ./codex-proxy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          sbom: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.runtime_version }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.env.outputs.digest || steps.proxy.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.component }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge ${{ matrix.component }} manifest
+    if: needs.prepare.outputs.release_needed == 'true'
+    needs:
+      - prepare
+      - build
+    strategy:
+      matrix:
+        include:
+          - component: codex-env
+            image: ghcr.io/edkaio/edka-codex-env
+          - component: codex-proxy
+            image: ghcr.io/edkaio/edka-codex-proxy
+    runs-on: blacksmith-2vcpu-ubuntu-2204
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Setup Docker Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.component }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Create and verify multi-arch manifest
+        working-directory: /tmp/digests
+        shell: bash
+        env:
+          RUNTIME_VERSION: ${{ needs.prepare.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${{ matrix.image }}:${RUNTIME_VERSION}" \
+            --tag "${{ matrix.image }}:latest" \
+            $(printf '${{ matrix.image }}@sha256:%s ' *)
+          docker buildx imagetools inspect "${{ matrix.image }}:${RUNTIME_VERSION}"
+
+  finalize:
+    name: Verify and create release
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (
+        (
+          needs.prepare.outputs.release_needed == 'true' &&
+          needs.build.result == 'success' &&
+          needs.merge.result == 'success'
+        ) ||
+        (
+          needs.prepare.outputs.release_needed == 'false' &&
+          needs.build.result == 'skipped' &&
+          needs.merge.result == 'skipped'
+        )
+      )
+    needs:
+      - prepare
+      - build
+      - merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify public package visibility
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for package in edka-codex-env edka-codex-proxy; do
+            visibility="$(
+              gh api \
+                "/orgs/edkaio/packages/container/${package}" \
+                --jq '.visibility'
+            )"
+            if [[ "${visibility}" != "public" ]]; then
+              echo "::error::ghcr.io/edkaio/${package} must be made public in GitHub package settings before customer clusters can pull it."
+              exit 1
+            fi
+          done
+
+      - name: Create bundle metadata
+        shell: bash
+        env:
+          RUNTIME_VERSION: ${{ needs.prepare.outputs.runtime_version }}
+          CODEX_VERSION: ${{ needs.prepare.outputs.codex_version }}
+          GH_VERSION: ${{ needs.prepare.outputs.gh_version }}
+        run: |
+          set -euo pipefail
+          env_digest="$(
+            docker buildx imagetools inspect \
+              "${CODEX_ENV_IMAGE}:${RUNTIME_VERSION}" \
+              --format '{{json .Manifest}}' |
+              jq -er '.digest'
+          )"
+          proxy_digest="$(
+            docker buildx imagetools inspect \
+              "${CODEX_PROXY_IMAGE}:${RUNTIME_VERSION}" \
+              --format '{{json .Manifest}}' |
+              jq -er '.digest'
+          )"
+          jq -n \
+            --arg runtimeVersion "${RUNTIME_VERSION}" \
+            --arg codexVersion "${CODEX_VERSION}" \
+            --arg ghVersion "${GH_VERSION}" \
+            --arg envReference "${CODEX_ENV_IMAGE}:${RUNTIME_VERSION}" \
+            --arg envDigest "${env_digest}" \
+            --arg proxyReference "${CODEX_PROXY_IMAGE}:${RUNTIME_VERSION}" \
+            --arg proxyDigest "${proxy_digest}" \
+            '{
+              runtimeVersion: $runtimeVersion,
+              codexVersion: $codexVersion,
+              githubCliVersion: $ghVersion,
+              images: {
+                environment: {
+                  reference: $envReference,
+                  digest: $envDigest
+                },
+                proxy: {
+                  reference: $proxyReference,
+                  digest: $proxyDigest
+                }
+              }
+            }' > bundle.json
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUNTIME_VERSION: ${{ needs.prepare.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" bundle.json --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              bundle.json \
+              --generate-notes \
+              --title "Codex runtime ${RUNTIME_VERSION}"
+          fi

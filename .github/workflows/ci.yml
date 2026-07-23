@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: codex-runtime-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify runtime
+    runs-on: ubuntu-latest
+    outputs:
+      codex_version: ${{ steps.versions.outputs.codex_version }}
+      codex_sha256_amd64: ${{ steps.versions.outputs.codex_sha256_amd64 }}
+      codex_sha256_arm64: ${{ steps.versions.outputs.codex_sha256_arm64 }}
+      gh_version: ${{ steps.versions.outputs.gh_version }}
+      gh_sha256_amd64: ${{ steps.versions.outputs.gh_sha256_amd64 }}
+      gh_sha256_arm64: ${{ steps.versions.outputs.gh_sha256_arm64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          source runtime.env
+          if [[ ! "${RUNTIME_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-edka\.[0-9]+$ ]]; then
+            echo "::error::RUNTIME_VERSION must use <codex-version>-edka.<revision>"
+            exit 1
+          fi
+          if [[ ! "${CODEX_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::CODEX_VERSION must be a complete semantic version"
+            exit 1
+          fi
+          if [[ ! "${GH_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::GH_VERSION must be a complete semantic version"
+            exit 1
+          fi
+          if [[ "${RUNTIME_VERSION}" != "${CODEX_VERSION}-edka."* ]]; then
+            echo "::error::RUNTIME_VERSION must identify the CODEX_VERSION compatibility line"
+            exit 1
+          fi
+          for checksum in \
+            "${CODEX_SHA256_AMD64}" \
+            "${CODEX_SHA256_ARM64}" \
+            "${GH_SHA256_AMD64}" \
+            "${GH_SHA256_ARM64}"; do
+            if [[ ! "${checksum}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Runtime artifact checksums must be lowercase SHA-256 values"
+              exit 1
+            fi
+          done
+          {
+            echo "codex_version=${CODEX_VERSION}"
+            echo "codex_sha256_amd64=${CODEX_SHA256_AMD64}"
+            echo "codex_sha256_arm64=${CODEX_SHA256_ARM64}"
+            echo "gh_version=${GH_VERSION}"
+            echo "gh_sha256_amd64=${GH_SHA256_AMD64}"
+            echo "gh_sha256_arm64=${GH_SHA256_ARM64}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: codex-proxy/go.mod
+          cache-dependency-path: codex-proxy/go.sum
+
+      - name: Check Go formatting
+        working-directory: codex-proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Test proxy
+        working-directory: codex-proxy
+        run: go test ./...
+
+      - name: Vet proxy
+        working-directory: codex-proxy
+        run: go vet ./...
+
+      - name: Test environment scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            codex-env/clone.sh \
+            codex-env/entrypoint.sh \
+            codex-env/gh \
+            codex-env/git-askpass-edka \
+            codex-env/git-credential-edka \
+            codex-env/scripts_test.sh
+          codex-env/scripts_test.sh
+
+  build:
+    name: Build ${{ matrix.component }} (${{ matrix.arch }})
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - component: codex-env
+            arch: amd64
+            platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2204
+          - component: codex-env
+            arch: arm64
+            platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
+          - component: codex-proxy
+            arch: amd64
+            platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2204
+          - component: codex-proxy
+            arch: arm64
+            platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Docker Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Build Codex environment
+        if: matrix.component == 'codex-env'
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ./codex-env
+          file: ./codex-env/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: edka-codex-env:ci-${{ matrix.arch }}
+          build-args: |
+            CODEX_VERSION=${{ needs.verify.outputs.codex_version }}
+            CODEX_SHA256_AMD64=${{ needs.verify.outputs.codex_sha256_amd64 }}
+            CODEX_SHA256_ARM64=${{ needs.verify.outputs.codex_sha256_arm64 }}
+            GH_VERSION=${{ needs.verify.outputs.gh_version }}
+            GH_SHA256_AMD64=${{ needs.verify.outputs.gh_sha256_amd64 }}
+            GH_SHA256_ARM64=${{ needs.verify.outputs.gh_sha256_arm64 }}
+          cache-from: type=gha,scope=codex-env-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=codex-env-${{ matrix.arch }}
+
+      - name: Smoke test Codex environment
+        if: matrix.component == 'codex-env'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="edka-codex-env:ci-${{ matrix.arch }}"
+          docker run --rm --entrypoint codex "${image}" --version |
+            grep -F "${{ needs.verify.outputs.codex_version }}"
+          docker run --rm --entrypoint /usr/bin/gh "${image}" --version |
+            grep -F "${{ needs.verify.outputs.gh_version }}"
+          app_server_help="$(
+            docker run --rm --entrypoint codex "${image}" app-server --help 2>&1
+          )"
+          grep -F -- "--ws-auth" <<<"${app_server_help}"
+          grep -F -- "--ws-shared-secret-file" <<<"${app_server_help}"
+
+      - name: Build Codex proxy
+        if: matrix.component == 'codex-proxy'
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ./codex-proxy
+          file: ./codex-proxy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: edka-codex-proxy:ci-${{ matrix.arch }}
+          cache-from: type=gha,scope=codex-proxy-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=codex-proxy-${{ matrix.arch }}
