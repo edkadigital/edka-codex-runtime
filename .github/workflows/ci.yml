@@ -111,6 +111,7 @@ jobs:
             codex-env/git-askpass-edka \
             codex-env/git-credential-edka \
             codex-env/scripts_test.sh
+          node --check codex-env/account_probe.mjs
           codex-env/scripts_test.sh
 
   build:
@@ -181,6 +182,19 @@ jobs:
           )"
           grep -F -- "--ws-auth" <<<"${app_server_help}"
           grep -F -- "--ws-shared-secret-file" <<<"${app_server_help}"
+          docker run --rm \
+            --env CODEX_AUTH_MODE=openrouter_api_key \
+            --env CODEX_MODEL=openai/gpt-5.6-sol \
+            --volume "${PWD}/codex-env/account_probe.mjs:/tmp/account_probe.mjs:ro" \
+            --entrypoint bash \
+            "${image}" \
+            -c '
+              set -euo pipefail
+              /usr/local/bin/entrypoint.sh true
+              printf "%s\n" "edka-provider-proxy" |
+                codex login --with-api-key >/dev/null
+              node /tmp/account_probe.mjs
+            '
 
       - name: Build Codex proxy
         if: matrix.component == 'codex-proxy'

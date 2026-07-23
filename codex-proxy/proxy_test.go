@@ -211,3 +211,159 @@ func TestProxyAuthenticatesRemoteAndOwnsSubscriptionRefresh(t *testing.T) {
 		t.Fatalf("unexpected broker refresh history: %#v", previousHashes)
 	}
 }
+
+func TestProxyPassesThroughAPIKeyWebSocketTraffic(t *testing.T) {
+	for _, authMode := range []AuthMode{AuthModeOpenAIAPIKey, AuthModeOpenRouterAPIKey} {
+		t.Run(authMode.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			const initializeRequest = `{"id":1,"method":"initialize","params":{"capabilities":{"experimentalApi":false},"client":"api-mode"}}`
+			const initializedNotification = `{"method":"initialized","params":{"client":"api-mode"}}`
+			const refreshRequest = `{"id":9,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"test"}}`
+			const refreshResponsePayload = `{"id":9,"result":{"passthrough":true}}`
+
+			upstreamErrors := make(chan error, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				connection, err := websocket.Accept(w, request, nil)
+				if err != nil {
+					upstreamErrors <- err
+					return
+				}
+				defer func() { _ = connection.CloseNow() }()
+
+				_, initialize, err := connection.Read(ctx)
+				if err != nil {
+					upstreamErrors <- err
+					return
+				}
+				if string(initialize) != initializeRequest {
+					upstreamErrors <- errors.New("proxy modified the API-mode initialize request")
+					return
+				}
+				if err := connection.Write(
+					ctx,
+					websocket.MessageText,
+					[]byte(`{"id":1,"result":{}}`),
+				); err != nil {
+					upstreamErrors <- err
+					return
+				}
+				_, initialized, err := connection.Read(ctx)
+				if err != nil {
+					upstreamErrors <- err
+					return
+				}
+				if string(initialized) != initializedNotification {
+					upstreamErrors <- errors.New("proxy modified the API-mode initialized notification")
+					return
+				}
+				if err := connection.Write(
+					ctx,
+					websocket.MessageText,
+					[]byte(refreshRequest),
+				); err != nil {
+					upstreamErrors <- err
+					return
+				}
+				_, refreshResponse, err := connection.Read(ctx)
+				if err != nil {
+					upstreamErrors <- err
+					return
+				}
+				if string(refreshResponse) != refreshResponsePayload {
+					upstreamErrors <- errors.New("proxy intercepted the API-mode refresh message")
+					return
+				}
+				if err := connection.Write(
+					ctx,
+					websocket.MessageText,
+					[]byte(`{"method":"test/ready","params":{}}`),
+				); err != nil {
+					upstreamErrors <- err
+					return
+				}
+				upstreamErrors <- nil
+			}))
+			defer upstream.Close()
+
+			secretFile := filepath.Join(t.TempDir(), "ws-secret")
+			secret := []byte("0123456789abcdef0123456789abcdef")
+			if err := os.WriteFile(secretFile, secret, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			brokerCalls := 0
+			proxy := New(Settings{
+				AuthMode:          authMode,
+				Upstream:          strings.Replace(upstream.URL, "http://", "ws://", 1),
+				ProviderTokenFile: filepath.Join(t.TempDir(), "provider-token"),
+				SharedSecretFile:  secretFile,
+				Issuer:            "edka",
+				Audience:          "environment-1",
+				Broker: brokerFunc(func(context.Context, string) (Token, error) {
+					brokerCalls++
+					return Token{}, errors.New("API mode must not call the subscription broker")
+				}),
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			proxyServer := httptest.NewServer(http.HandlerFunc(proxy.handle))
+			defer proxyServer.Close()
+
+			headers := http.Header{}
+			headers.Set(
+				"Authorization",
+				"Bearer "+signRemoteToken(
+					t,
+					secret,
+					"edka",
+					"environment-1",
+					time.Now().Add(time.Hour),
+				),
+			)
+			client, _, err := websocket.Dial(
+				ctx,
+				strings.Replace(proxyServer.URL, "http://", "ws://", 1),
+				&websocket.DialOptions{HTTPHeader: headers},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = client.CloseNow() }()
+
+			if err := client.Write(ctx, websocket.MessageText, []byte(initializeRequest)); err != nil {
+				t.Fatal(err)
+			}
+			if _, response, err := client.Read(ctx); err != nil ||
+				!strings.Contains(string(response), `"id":1`) {
+				t.Fatalf("read initialize response: %v: %s", err, response)
+			}
+			if err := client.Write(
+				ctx,
+				websocket.MessageText,
+				[]byte(initializedNotification),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if _, refresh, err := client.Read(ctx); err != nil ||
+				string(refresh) != refreshRequest {
+				t.Fatalf("read passthrough refresh request: %v: %s", err, refresh)
+			}
+			if err := client.Write(
+				ctx,
+				websocket.MessageText,
+				[]byte(refreshResponsePayload),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if _, notification, err := client.Read(ctx); err != nil ||
+				rpcMethod(notification) != "test/ready" {
+				t.Fatalf("read ready notification: %v: %s", err, notification)
+			}
+			if err := <-upstreamErrors; err != nil {
+				t.Fatal(err)
+			}
+			if brokerCalls != 0 {
+				t.Fatalf("API mode called subscription broker %d times", brokerCalls)
+			}
+		})
+	}
+}

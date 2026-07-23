@@ -20,10 +20,16 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	settings := Settings{
-		Addr:             envOrDefault("EDKA_CODEX_PROXY_ADDR", ":4500"),
-		Upstream:         envOrDefault("EDKA_CODEX_PROXY_UPSTREAM", "ws://127.0.0.1:4501"),
-		BrokerURL:        os.Getenv("EDKA_CODEX_BROKER_URL"),
-		BrokerTokenFile:  envOrDefault("EDKA_CODEX_BROKER_TOKEN_FILE", "/var/run/edka/broker/token"),
+		AuthMode:        AuthMode(envOrDefault("CODEX_AUTH_MODE", string(AuthModeSubscription))),
+		Addr:            envOrDefault("EDKA_CODEX_PROXY_ADDR", ":4500"),
+		Upstream:        envOrDefault("EDKA_CODEX_PROXY_UPSTREAM", "ws://127.0.0.1:4501"),
+		BrokerURL:       os.Getenv("EDKA_CODEX_BROKER_URL"),
+		BrokerTokenFile: envOrDefault("EDKA_CODEX_BROKER_TOKEN_FILE", "/var/run/edka/broker/token"),
+		ProviderAddr:    providerListenAddr,
+		ProviderTokenFile: envOrDefault(
+			"EDKA_CODEX_PROVIDER_TOKEN_FILE",
+			"/var/run/edka/provider/token",
+		),
 		SharedSecretFile: envOrDefault("EDKA_CODEX_WS_SHARED_SECRET_FILE", "/var/run/edka/ws/secret"),
 		Issuer:           envOrDefault("EDKA_CODEX_WS_ISSUER", "edka"),
 		Audience:         os.Getenv("EDKA_CODEX_WS_AUDIENCE"),
@@ -31,10 +37,17 @@ func run(ctx context.Context, args []string) error {
 
 	flags := flag.NewFlagSet("codex-proxy", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	flags.Var(&settings.AuthMode, "auth-mode", "authentication mode")
 	flags.StringVar(&settings.Addr, "addr", settings.Addr, "HTTP/WebSocket listen address")
 	flags.StringVar(&settings.Upstream, "upstream", settings.Upstream, "Codex app-server WebSocket URL")
 	flags.StringVar(&settings.BrokerURL, "broker-url", settings.BrokerURL, "Edka subscription broker URL")
 	flags.StringVar(&settings.BrokerTokenFile, "broker-token-file", settings.BrokerTokenFile, "broker bearer-token file")
+	flags.StringVar(
+		&settings.ProviderTokenFile,
+		"provider-token-file",
+		settings.ProviderTokenFile,
+		"provider API-token file",
+	)
 	flags.StringVar(&settings.SharedSecretFile, "ws-shared-secret-file", settings.SharedSecretFile, "remote-auth HMAC secret file")
 	flags.StringVar(&settings.Issuer, "ws-issuer", settings.Issuer, "required remote-auth token issuer")
 	flags.StringVar(&settings.Audience, "ws-audience", settings.Audience, "required remote-auth token audience")
