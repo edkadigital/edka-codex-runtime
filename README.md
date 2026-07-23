@@ -3,14 +3,14 @@
 `edka-codex-runtime` builds the two containers used by Codex environments in Edka-managed
 clusters:
 
-- `ghcr.io/edkaio/edka-codex-env` contains the pinned Codex CLI, GitHub CLI, Git tooling, and
-  the workspace bootstrap scripts.
+- `ghcr.io/edkaio/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
+  Git tooling, and the workspace bootstrap scripts.
 - `ghcr.io/edkaio/edka-codex-proxy` authenticates remote WebSocket connections and injects
   short-lived ChatGPT subscription credentials obtained from the Edka broker.
 
 The images are released together as one compatibility bundle. `RUNTIME_VERSION` in `runtime.env`
-is the immutable image tag for both images. The same file pins the upstream Codex and GitHub CLI
-artifacts and their SHA-256 checksums.
+is the immutable image tag for both images. The same file pins the upstream Codex, Node.js, and
+GitHub CLI versions, plus SHA-256 checksums for the downloaded Codex and GitHub CLI artifacts.
 
 ## Runtime contract
 
@@ -22,6 +22,7 @@ The environment image supports:
 
 - `openai_api_key`, `openrouter_api_key`, and `subscription` authentication modes;
 - signed bearer authentication for direct app-server connections;
+- headless operation with Codex Apps disabled and Node.js available to bundled plugin MCP servers;
 - crash-safe branch, tag, pull-request ref, and commit-SHA workspace initialization;
 - Git and `gh` credentials read from the mounted token file on every invocation.
 
@@ -63,6 +64,7 @@ source runtime.env
 set +a
 docker build \
   --build-arg "CODEX_VERSION=${CODEX_VERSION}" \
+  --build-arg "NODE_VERSION=${NODE_VERSION}" \
   --build-arg "CODEX_SHA256_AMD64=${CODEX_SHA256_AMD64}" \
   --build-arg "CODEX_SHA256_ARM64=${CODEX_SHA256_ARM64}" \
   --build-arg "GH_VERSION=${GH_VERSION}" \

@@ -25,6 +25,7 @@ jobs:
       codex_version: ${{ steps.versions.outputs.codex_version }}
       codex_sha256_amd64: ${{ steps.versions.outputs.codex_sha256_amd64 }}
       codex_sha256_arm64: ${{ steps.versions.outputs.codex_sha256_arm64 }}
+      node_version: ${{ steps.versions.outputs.node_version }}
       gh_version: ${{ steps.versions.outputs.gh_version }}
       gh_sha256_amd64: ${{ steps.versions.outputs.gh_sha256_amd64 }}
       gh_sha256_arm64: ${{ steps.versions.outputs.gh_sha256_arm64 }}
@@ -45,6 +46,10 @@ jobs:
           fi
           if [[ ! "${CODEX_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::CODEX_VERSION must be a complete semantic version"
+            exit 1
+          fi
+          if [[ ! "${NODE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::NODE_VERSION must be a complete semantic version"
             exit 1
           fi
           if [[ ! "${GH_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -74,6 +79,7 @@ jobs:
             echo "codex_version=${CODEX_VERSION}"
             echo "codex_sha256_amd64=${CODEX_SHA256_AMD64}"
             echo "codex_sha256_arm64=${CODEX_SHA256_ARM64}"
+            echo "node_version=${NODE_VERSION}"
             echo "gh_version=${GH_VERSION}"
             echo "gh_sha256_amd64=${GH_SHA256_AMD64}"
             echo "gh_sha256_arm64=${GH_SHA256_ARM64}"
@@ -196,6 +202,7 @@ jobs:
           sbom: false
           build-args: |
             CODEX_VERSION=${{ needs.prepare.outputs.codex_version }}
+            NODE_VERSION=${{ needs.prepare.outputs.node_version }}
             CODEX_SHA256_AMD64=${{ needs.prepare.outputs.codex_sha256_amd64 }}
             CODEX_SHA256_ARM64=${{ needs.prepare.outputs.codex_sha256_arm64 }}
             GH_VERSION=${{ needs.prepare.outputs.gh_version }}
@@ -348,6 +355,7 @@ jobs:
         env:
           RUNTIME_VERSION: ${{ needs.prepare.outputs.runtime_version }}
           CODEX_VERSION: ${{ needs.prepare.outputs.codex_version }}
+          NODE_VERSION: ${{ needs.prepare.outputs.node_version }}
           GH_VERSION: ${{ needs.prepare.outputs.gh_version }}
         run: |
           set -euo pipefail
@@ -366,6 +374,7 @@ jobs:
           jq -n \
             --arg runtimeVersion "${RUNTIME_VERSION}" \
             --arg codexVersion "${CODEX_VERSION}" \
+            --arg nodeVersion "${NODE_VERSION}" \
             --arg ghVersion "${GH_VERSION}" \
             --arg envReference "${CODEX_ENV_IMAGE}:${RUNTIME_VERSION}" \
             --arg envDigest "${env_digest}" \
@@ -374,6 +383,7 @@ jobs:
             '{
               runtimeVersion: $runtimeVersion,
               codexVersion: $codexVersion,
+              nodeVersion: $nodeVersion,
               githubCliVersion: $ghVersion,
               images: {
                 environment: {
