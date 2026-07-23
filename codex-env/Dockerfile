@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
+ARG NODE_VERSION
+FROM node:${NODE_VERSION}-bookworm-slim AS node-runtime
+
 FROM debian:bookworm-slim
 
 ARG CODEX_VERSION
+ARG NODE_VERSION
 ARG TARGETARCH
 ARG CODEX_SHA256_AMD64
 ARG CODEX_SHA256_ARM64
@@ -21,10 +25,16 @@ RUN apt-get update \
         git \
         jq \
         less \
+        libatomic1 \
+        libstdc++6 \
         openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+
+RUN test "$(node --version)" = "v${NODE_VERSION}"
 
 RUN set -eux; \
     case "${TARGETARCH}" in \

@@ -59,6 +59,9 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
         echo 'model_provider = "openrouter"'
     fi
     echo
+    echo '[features]'
+    echo 'apps = false'
+    echo
     printf '[projects."%s"]\n' "${WORKSPACE_DIR}"
     echo 'trust_level = "trusted"'
     if [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then

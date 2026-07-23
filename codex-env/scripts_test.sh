@@ -27,6 +27,22 @@ http_output="$(
 )"
 [[ -z "${http_output}" ]]
 
+codex_home="${test_root}/codex-home"
+git_config="${test_root}/gitconfig"
+CODEX_HOME="${codex_home}" \
+    GIT_CONFIG_GLOBAL="${git_config}" \
+    WORKSPACE_DIR="/workspace" \
+    CODEX_AUTH_MODE="subscription" \
+    "${script_dir}/entrypoint.sh" true
+
+config_file="${codex_home}/config.toml"
+grep -Fqx 'approval_policy = "never"' "${config_file}"
+grep -Fqx 'sandbox_mode = "danger-full-access"' "${config_file}"
+grep -Fqx '[features]' "${config_file}"
+grep -Fqx 'apps = false' "${config_file}"
+grep -Fqx '[projects."/workspace"]' "${config_file}"
+grep -Fqx 'trust_level = "trusted"' "${config_file}"
+
 source_repo="${test_root}/source"
 git init --initial-branch=main "${source_repo}" >/dev/null
 git -C "${source_repo}" config user.name 'Codex Env Test'
