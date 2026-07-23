@@ -31,7 +31,10 @@ state under `/home/codex` and `/tmp`. Edka mounts the GitHub token at
 `/var/run/edka/github/token` and the remote-auth secret at `/var/run/edka/ws/secret`.
 
 API-key environments expose the Codex app-server directly on port `4500` with signed bearer
-authentication. Subscription environments run the app-server without remote authentication on
+authentication. At startup the entrypoint logs the mode's key (`OPENAI_API_KEY` or
+`OPENROUTER_API_KEY`) into the app-server via `codex login --with-api-key` — without a login the
+app-server reports onboarding to remote clients even when the active provider reads its key from
+the environment. Subscription environments run the app-server without remote authentication on
 loopback port `4501`; the authenticated proxy is the only externally reachable container.
 
 The subscription proxy requires:

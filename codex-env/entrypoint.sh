@@ -83,6 +83,22 @@ if [[ $# -gt 0 ]]; then
     exec "$@"
 fi
 
+# The app-server reports onboarding until a login exists, even when the
+# active model provider reads its key from the environment. API-key modes
+# therefore log in with the mode's key before serving; provider requests
+# still use the env_key configured above.
+if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" || "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
+    api_key_var="OPENAI_API_KEY"
+    if [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
+        api_key_var="OPENROUTER_API_KEY"
+    fi
+    if [[ -z "${!api_key_var:-}" ]]; then
+        echo "${api_key_var} is required for CODEX_AUTH_MODE=${CODEX_AUTH_MODE}" >&2
+        exit 1
+    fi
+    printenv "${api_key_var}" | codex login --with-api-key
+fi
+
 codex_args=(app-server --listen "${CODEX_APP_SERVER_ADDR}")
 case "${CODEX_WS_AUTH_MODE}" in
     none)

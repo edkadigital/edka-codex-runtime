@@ -43,6 +43,57 @@ grep -Fqx 'apps = false' "${config_file}"
 grep -Fqx '[projects."/workspace"]' "${config_file}"
 grep -Fqx 'trust_level = "trusted"' "${config_file}"
 
+# API-key serve path: the entrypoint must log the mode's key into the
+# app-server before serving. A fake codex on PATH records the login stdin
+# and the final app-server invocation.
+fake_bin="${test_root}/bin"
+mkdir -p "${fake_bin}"
+cat >"${fake_bin}/codex" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "login" ]]; then
+    cat >"${FAKE_CODEX_DIR}/login-stdin"
+    printf '%s\n' "$*" >"${FAKE_CODEX_DIR}/login-args"
+    exit 0
+fi
+printf '%s\n' "$*" >"${FAKE_CODEX_DIR}/serve-args"
+exit 0
+FAKE
+chmod +x "${fake_bin}/codex"
+
+openrouter_home="${test_root}/openrouter-home"
+ws_secret_file="${test_root}/ws-secret"
+printf '%s\n' 'ws-shared-secret' >"${ws_secret_file}"
+FAKE_CODEX_DIR="${test_root}" \
+    PATH="${fake_bin}:${PATH}" \
+    CODEX_HOME="${openrouter_home}" \
+    GIT_CONFIG_GLOBAL="${test_root}/openrouter-gitconfig" \
+    WORKSPACE_DIR="/workspace" \
+    CODEX_AUTH_MODE="openrouter_api_key" \
+    OPENROUTER_API_KEY="sk-or-v1-test-key" \
+    CODEX_WS_SHARED_SECRET_FILE="${ws_secret_file}" \
+    CODEX_WS_AUDIENCE="environment-123" \
+    "${script_dir}/entrypoint.sh"
+grep -Fqx 'model_provider = "openrouter"' "${openrouter_home}/config.toml"
+grep -Fqx 'env_key = "OPENROUTER_API_KEY"' "${openrouter_home}/config.toml"
+[[ "$(<"${test_root}/login-stdin")" == 'sk-or-v1-test-key' ]]
+[[ "$(<"${test_root}/login-args")" == 'login --with-api-key' ]]
+serve_args="$(<"${test_root}/serve-args")"
+[[ "${serve_args}" == *'app-server'* ]]
+[[ "${serve_args}" == *'--ws-auth signed-bearer-token'* ]]
+[[ "${serve_args}" == *'--ws-audience environment-123'* ]]
+
+# A missing key must fail closed before the app-server starts.
+if FAKE_CODEX_DIR="${test_root}" \
+    PATH="${fake_bin}:${PATH}" \
+    CODEX_HOME="${test_root}/missing-key-home" \
+    GIT_CONFIG_GLOBAL="${test_root}/missing-key-gitconfig" \
+    WORKSPACE_DIR="/workspace" \
+    CODEX_AUTH_MODE="openai_api_key" \
+    "${script_dir}/entrypoint.sh" 2>/dev/null; then
+    echo "entrypoint unexpectedly served without an API key" >&2
+    exit 1
+fi
+
 source_repo="${test_root}/source"
 git init --initial-branch=main "${source_repo}" >/dev/null
 git -C "${source_repo}" config user.name 'Codex Env Test'
