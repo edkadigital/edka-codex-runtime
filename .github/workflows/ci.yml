@@ -26,7 +26,7 @@ jobs:
       gh_sha256_arm64: ${{ steps.versions.outputs.gh_sha256_arm64 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Validate versions
         id: versions
@@ -70,7 +70,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: codex-proxy/go.mod
           cache-dependency-path: codex-proxy/go.sum
@@ -132,10 +132,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Docker Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       - name: Build Codex environment
         if: matrix.component == 'codex-env'
