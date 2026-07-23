@@ -85,7 +85,6 @@ The tag workflow builds both architectures on native runners, publishes both imm
 tags, updates `latest`, verifies that both GHCR packages are public, and creates one GitHub release
 with a `bundle.json` manifest. Existing immutable tags are never overwritten.
 
-GitHub creates new packages as private. After the first publish, an organization owner must remove
-inherited repository access if shown and make `edka-codex-env` and `edka-codex-proxy` public in
-their package settings. This is a one-time, irreversible action; rerun the release workflow after
-both packages are public.
+GitHub creates new packages as private. After the first publish, an organization owner must make
+`edka-codex-env` and `edka-codex-proxy` public in their package settings. This is a one-time,
+irreversible action; rerun the release workflow after both packages are public.
