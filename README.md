@@ -5,8 +5,8 @@ clusters:
 
 - `ghcr.io/edkaio/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
   Git tooling, and the workspace bootstrap scripts.
-- `ghcr.io/edkaio/edka-codex-proxy` authenticates remote WebSocket connections and injects
-  short-lived ChatGPT subscription credentials obtained from the Edka broker.
+- `ghcr.io/edkaio/edka-codex-proxy` authenticates remote WebSocket connections and injects either
+  short-lived ChatGPT subscription credentials or mounted provider API keys.
 
 The images are released together as one compatibility bundle. `RUNTIME_VERSION` in `runtime.env`
 is the immutable image tag for both images. The same file pins the upstream Codex, Node.js, and
@@ -18,28 +18,53 @@ Edka creates the Kubernetes resources, mounts repository-scoped GitHub credentia
 the environment variables and token files consumed by these images. This repository owns only the
 runtime images and their compatibility tests.
 
-The environment image supports:
+The runtime supports:
 
 - `openai_api_key`, `openrouter_api_key`, and `subscription` authentication modes;
-- signed bearer authentication for direct app-server connections;
+- signed bearer authentication at the remote WebSocket proxy;
 - headless operation with Codex Apps disabled and Node.js available to bundled plugin MCP servers;
 - crash-safe branch, tag, pull-request ref, and commit-SHA workspace initialization;
 - Git and `gh` credentials read from the mounted token file on every invocation.
 
 It runs as UID/GID `1000`, uses `/workspace` as the repository root, and stores writable runtime
-state under `/home/codex` and `/tmp`. Edka mounts the GitHub token at
-`/var/run/edka/github/token` and the remote-auth secret at `/var/run/edka/ws/secret`.
+state under `/home/codex` and `/tmp`. Edka mounts the GitHub token into the environment container at
+`/var/run/edka/github/token` and the remote-auth secret into the proxy container at
+`/var/run/edka/ws/secret`.
 
-API-key environments expose the Codex app-server directly on port `4500` with signed bearer
-authentication. Subscription environments run the app-server without remote authentication on
-loopback port `4501`; the authenticated proxy is the only externally reachable container.
+Every mode runs the Codex app-server without remote authentication on loopback port `4501`. The
+authenticated proxy is the only container listening for remote WebSocket connections on port
+`4500`.
 
-The subscription proxy requires:
+Every mode requires:
+
+- `CODEX_AUTH_MODE`
+- `EDKA_CODEX_WS_SHARED_SECRET_FILE`
+- `EDKA_CODEX_WS_AUDIENCE`
+
+In `subscription` mode, the proxy additionally requires:
 
 - `EDKA_CODEX_BROKER_URL`
 - `EDKA_CODEX_BROKER_TOKEN_FILE`
-- `EDKA_CODEX_WS_SHARED_SECRET_FILE`
-- `EDKA_CODEX_WS_AUDIENCE`
+
+In `openai_api_key` or `openrouter_api_key` mode, the proxy does not use the subscription broker.
+It additionally reads `EDKA_CODEX_PROVIDER_TOKEN_FILE` (default
+`/var/run/edka/provider/token`), listens on the fixed loopback address `127.0.0.1:4502`, and
+forwards only `/v1/responses` and `/v1/models` paths to the mode's fixed upstream:
+
+- `https://api.openai.com/v1`
+- `https://openrouter.ai/api/v1`
+
+The selected key is mounted only into the proxy container at `/var/run/edka/provider/token`. The
+proxy reads that file for every provider request, replaces a constant non-secret marker bearer
+token, and never places the real key in the environment container's config, environment, arguments,
+or Codex auth file. This keeps provider credentials unavailable to commands executed by Codex and
+allows key rotation without rebuilding the environment.
+
+The environment config uses the custom `edka_openai` provider for OpenAI and `openrouter` for
+OpenRouter. Both providers require Codex API-key authentication but disable provider WebSockets.
+At startup, the environment records only the constant marker with `codex login --with-api-key`;
+that makes the remote TUI skip onboarding while all model traffic stays on the loopback HTTP proxy.
+OpenRouter model identifiers keep their `provider/model` form, for example `openai/gpt-5.6-sol`.
 
 Optional proxy settings are documented by `codex-proxy --help`.
 

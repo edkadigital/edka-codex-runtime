@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -21,17 +22,24 @@ const (
 )
 
 type Settings struct {
-	Addr             string
-	Upstream         string
-	BrokerURL        string
-	BrokerTokenFile  string
-	SharedSecretFile string
-	Issuer           string
-	Audience         string
-	Broker           TokenBroker
+	AuthMode          AuthMode
+	Addr              string
+	Upstream          string
+	BrokerURL         string
+	BrokerTokenFile   string
+	ProviderAddr      string
+	ProviderTokenFile string
+	SharedSecretFile  string
+	Issuer            string
+	Audience          string
+	Broker            TokenBroker
 }
 
 func (s Settings) Validate() error {
+	authMode := s.effectiveAuthMode()
+	if !authMode.Valid() {
+		return fmt.Errorf("unsupported authentication mode %q", authMode)
+	}
 	if s.Addr == "" {
 		return fmt.Errorf("proxy listen address is required")
 	}
@@ -39,12 +47,21 @@ func (s Settings) Validate() error {
 	if err != nil || (upstream.Scheme != "ws" && upstream.Scheme != "wss") || upstream.Host == "" {
 		return fmt.Errorf("valid WebSocket upstream is required")
 	}
-	if s.Broker == nil {
-		if s.BrokerURL == "" {
-			return fmt.Errorf("broker URL is required")
+	if authMode == AuthModeSubscription {
+		if s.Broker == nil {
+			if s.BrokerURL == "" {
+				return fmt.Errorf("broker URL is required")
+			}
+			if s.BrokerTokenFile == "" {
+				return fmt.Errorf("broker token file is required")
+			}
 		}
-		if s.BrokerTokenFile == "" {
-			return fmt.Errorf("broker token file is required")
+	} else {
+		if err := validateLoopbackAddress(s.ProviderAddr); err != nil {
+			return err
+		}
+		if s.ProviderTokenFile == "" {
+			return fmt.Errorf("provider token file is required")
 		}
 	}
 	if s.SharedSecretFile == "" {
@@ -59,25 +76,60 @@ func (s Settings) Validate() error {
 	return nil
 }
 
+func (s Settings) effectiveAuthMode() AuthMode {
+	if s.AuthMode == "" {
+		return AuthModeSubscription
+	}
+	return s.AuthMode
+}
+
+func validateLoopbackAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("valid provider listen address is required: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("provider listen address must use a loopback IP")
+	}
+	return nil
+}
+
 type Proxy struct {
 	settings   Settings
 	logger     *slog.Logger
 	broker     *resilientBroker
+	provider   http.Handler
 	authorizer remoteAuthorizer
 }
 
 func New(settings Settings, logger *slog.Logger) *Proxy {
-	broker := settings.Broker
-	if broker == nil {
-		broker = HTTPBroker{
-			URL:       settings.BrokerURL,
-			TokenFile: settings.BrokerTokenFile,
+	authMode := settings.effectiveAuthMode()
+	var broker *resilientBroker
+	if authMode == AuthModeSubscription {
+		upstream := settings.Broker
+		if upstream == nil {
+			upstream = HTTPBroker{
+				URL:       settings.BrokerURL,
+				TokenFile: settings.BrokerTokenFile,
+			}
 		}
+		broker = newResilientBroker(upstream)
+	}
+	var provider http.Handler
+	if authMode.IsAPIKey() {
+		provider = newProviderProxy(
+			providerUpstream(authMode),
+			settings.ProviderTokenFile,
+			nil,
+			logger,
+		)
 	}
 	return &Proxy{
 		settings: settings,
 		logger:   logger,
-		broker:   newResilientBroker(broker),
+		broker:   broker,
+		provider: provider,
 		authorizer: remoteAuthorizer{
 			sharedSecretFile: settings.SharedSecretFile,
 			issuer:           settings.Issuer,
@@ -93,25 +145,45 @@ func (p *Proxy) Serve(ctx context.Context) error {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/", p.handle)
-	server := &http.Server{
+	servers := []*http.Server{{
 		Addr:              p.settings.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    32 << 10,
+	}}
+	if p.provider != nil {
+		servers = append(servers, &http.Server{
+			Addr:              p.settings.ProviderAddr,
+			Handler:           p.provider,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+			MaxHeaderBytes:    32 << 10,
+		})
 	}
 
-	errc := make(chan error, 1)
-	go func() { errc <- server.ListenAndServe() }()
+	errc := make(chan error, len(servers))
+	for _, server := range servers {
+		go func() { errc <- server.ListenAndServe() }()
+	}
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("shut down Codex proxy: %w", err)
+		for _, server := range servers {
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				return fmt.Errorf("shut down Codex proxy: %w", err)
+			}
 		}
 		return ctx.Err()
 	case err := <-errc:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, server := range servers {
+			if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+				p.logger.Error("shut down Codex proxy listener", "error", shutdownErr)
+			}
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -147,11 +219,14 @@ func (p *Proxy) handle(w http.ResponseWriter, request *http.Request) {
 	defer func() { _ = upstream.CloseNow() }()
 	upstream.SetReadLimit(websocketReadLimit)
 
-	token, err := p.initialize(request.Context(), client, upstream)
-	if err != nil {
-		p.logger.Error("initialize Codex subscription proxy", "error", err)
-		_ = client.Close(websocket.StatusInternalError, "Codex subscription authentication unavailable")
-		return
+	var token Token
+	if p.settings.effectiveAuthMode() == AuthModeSubscription {
+		token, err = p.initialize(request.Context(), client, upstream)
+		if err != nil {
+			p.logger.Error("initialize Codex subscription proxy", "error", err)
+			_ = client.Close(websocket.StatusInternalError, "Codex subscription authentication unavailable")
+			return
+		}
 	}
 
 	connection := &proxyConnection{
@@ -226,7 +301,7 @@ func (p *Proxy) initialize(
 type proxyConnection struct {
 	client        *websocket.Conn
 	upstream      *websocket.Conn
-	broker        TokenBroker
+	broker        *resilientBroker
 	logger        *slog.Logger
 	upstreamWrite sync.Mutex
 	clientWrite   sync.Mutex
@@ -266,7 +341,7 @@ func (c *proxyConnection) upstreamToClient(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if rpcMethod(payload) == "account/chatgptAuthTokens/refresh" {
+		if c.broker != nil && rpcMethod(payload) == "account/chatgptAuthTokens/refresh" {
 			if err := c.handleRefresh(ctx, payload); err != nil {
 				return err
 			}

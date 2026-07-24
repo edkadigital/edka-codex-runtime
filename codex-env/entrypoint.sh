@@ -4,11 +4,8 @@ set -euo pipefail
 CODEX_HOME="${CODEX_HOME:-/home/codex/.codex}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 CODEX_AUTH_MODE="${CODEX_AUTH_MODE:-openai_api_key}"
-CODEX_APP_SERVER_ADDR="${CODEX_APP_SERVER_ADDR:-ws://0.0.0.0:4500}"
-CODEX_WS_AUTH_MODE="${CODEX_WS_AUTH_MODE:-}"
-CODEX_WS_SHARED_SECRET_FILE="${CODEX_WS_SHARED_SECRET_FILE:-/var/run/edka/ws/secret}"
-CODEX_WS_ISSUER="${CODEX_WS_ISSUER:-edka}"
-CODEX_WS_AUDIENCE="${CODEX_WS_AUDIENCE:-}"
+CODEX_APP_SERVER_ADDR="${CODEX_APP_SERVER_ADDR:-ws://127.0.0.1:4501}"
+CODEX_WS_AUTH_MODE="${CODEX_WS_AUTH_MODE:-none}"
 
 case "${CODEX_AUTH_MODE}" in
     subscription | openai_api_key | openrouter_api_key) ;;
@@ -26,14 +23,19 @@ if [[ ! "${WORKSPACE_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
     echo "WORKSPACE_DIR must be an absolute path without whitespace" >&2
     exit 1
 fi
-
-if [[ -z "${CODEX_WS_AUTH_MODE}" ]]; then
-    if [[ "${CODEX_AUTH_MODE}" == "subscription" ]]; then
-        CODEX_WS_AUTH_MODE="none"
-    else
-        CODEX_WS_AUTH_MODE="signed-bearer-token"
-    fi
+if [[ ! "${CODEX_APP_SERVER_ADDR}" =~ ^ws://(127\.0\.0\.1|\[::1\]):[0-9]+$ ]]; then
+    echo "CODEX_APP_SERVER_ADDR must use a loopback WebSocket address" >&2
+    exit 1
 fi
+if [[ "${CODEX_WS_AUTH_MODE}" != "none" ]]; then
+    echo "CODEX_WS_AUTH_MODE must be none behind codex-proxy" >&2
+    exit 1
+fi
+
+# Provider credentials belong exclusively to the proxy sidecar. Remove
+# accidentally supplied legacy variables before executing any user-controlled
+# command or the Codex app-server.
+unset OPENAI_API_KEY OPENROUTER_API_KEY
 
 umask 077
 mkdir -p "${CODEX_HOME}" "${CODEX_HOME}/cache" "${CODEX_HOME}/gh" "${CODEX_HOME}/xdg"
@@ -54,7 +56,7 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
         printf 'model = "%s"\n' "${CODEX_MODEL}"
     fi
     if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" ]]; then
-        echo 'model_provider = "openai"'
+        echo 'model_provider = "edka_openai"'
     elif [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
         echo 'model_provider = "openrouter"'
     fi
@@ -64,13 +66,22 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
     echo
     printf '[projects."%s"]\n' "${WORKSPACE_DIR}"
     echo 'trust_level = "trusted"'
-    if [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
+    if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" ]]; then
+        echo
+        echo '[model_providers.edka_openai]'
+        echo 'name = "OpenAI"'
+        echo 'base_url = "http://127.0.0.1:4502/v1"'
+        echo 'wire_api = "responses"'
+        echo 'requires_openai_auth = true'
+        echo 'supports_websockets = false'
+    elif [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
         echo
         echo '[model_providers.openrouter]'
-        echo 'name = "OpenRouter"'
-        echo 'base_url = "https://openrouter.ai/api/v1"'
-        echo 'env_key = "OPENROUTER_API_KEY"'
+        echo 'name = "OpenRouter through Edka credential proxy"'
+        echo 'base_url = "http://127.0.0.1:4502/v1"'
         echo 'wire_api = "responses"'
+        echo 'requires_openai_auth = true'
+        echo 'supports_websockets = false'
     fi
 } >"${config_tmp}"
 mv "${config_tmp}" "${CODEX_HOME}/config.toml"
@@ -83,30 +94,13 @@ if [[ $# -gt 0 ]]; then
     exec "$@"
 fi
 
+if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" || "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
+    # The remote TUI enters onboarding unless the app-server reports an
+    # account. Register a constant, non-secret marker while the provider proxy
+    # replaces it with the mounted real key on every upstream request.
+    printf '%s\n' 'edka-provider-proxy' | codex login --with-api-key >/dev/null
+fi
+
 codex_args=(app-server --listen "${CODEX_APP_SERVER_ADDR}")
-case "${CODEX_WS_AUTH_MODE}" in
-    none)
-        ;;
-    signed-bearer-token)
-        if [[ ! -s "${CODEX_WS_SHARED_SECRET_FILE}" ]]; then
-            echo "Codex WebSocket shared secret file is missing or empty" >&2
-            exit 1
-        fi
-        if [[ -z "${CODEX_WS_AUDIENCE}" ]]; then
-            echo "CODEX_WS_AUDIENCE is required for signed bearer authentication" >&2
-            exit 1
-        fi
-        codex_args+=(
-            --ws-auth signed-bearer-token
-            --ws-shared-secret-file "${CODEX_WS_SHARED_SECRET_FILE}"
-            --ws-issuer "${CODEX_WS_ISSUER}"
-            --ws-audience "${CODEX_WS_AUDIENCE}"
-        )
-        ;;
-    *)
-        echo "unsupported CODEX_WS_AUTH_MODE: ${CODEX_WS_AUTH_MODE}" >&2
-        exit 1
-        ;;
-esac
 
 exec codex "${codex_args[@]}"
