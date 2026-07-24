@@ -53,7 +53,7 @@ fake_codex="${fake_bin}/codex"
 {
     echo '#!/usr/bin/env bash'
     echo 'set -euo pipefail'
-    echo 'if [[ -n "${OPENAI_API_KEY+x}" || -n "${OPENROUTER_API_KEY+x}" ]]; then'
+    echo 'if [[ -n "${OPENAI_API_KEY+x}" ]]; then'
     echo '    printf "%s\n" leaked >"${CODEX_TEST_ENV_FILE}"'
     echo 'else'
     echo '    printf "%s\n" confined >"${CODEX_TEST_ENV_FILE}"'
@@ -91,7 +91,6 @@ run_api_mode_test() {
         CODEX_TEST_LOGIN_ARGS_FILE="${login_args_file}" \
         CODEX_TEST_LOGIN_STDIN_FILE="${login_stdin_file}" \
         OPENAI_API_KEY="must-not-reach-codex-openai" \
-        OPENROUTER_API_KEY="must-not-reach-codex-legacy" \
         "${script_dir}/entrypoint.sh"
 
     local mode_config="${mode_home}/config.toml"
@@ -107,8 +106,7 @@ run_api_mode_test() {
         echo "${auth_mode} config unexpectedly contains provider auth commands" >&2
         exit 1
     fi
-    if grep -Eq 'env_key|must-not-reach-codex|OPENAI_API_KEY|OPENROUTER_API_KEY' \
-        "${mode_config}"; then
+    if grep -Eq 'env_key|must-not-reach-codex|OPENAI_API_KEY' "${mode_config}"; then
         echo "${auth_mode} config contains a real-key source" >&2
         exit 1
     fi
@@ -126,7 +124,7 @@ run_api_mode_test \
 if CODEX_HOME="${test_root}/unsupported-auth-home" \
     GIT_CONFIG_GLOBAL="${test_root}/unsupported-auth-gitconfig" \
     WORKSPACE_DIR="/workspace" \
-    CODEX_AUTH_MODE="openrouter_api_key" \
+    CODEX_AUTH_MODE="unsupported" \
     "${script_dir}/entrypoint.sh" true 2>/dev/null; then
     echo "entrypoint accepted an unsupported authentication mode" >&2
     exit 1

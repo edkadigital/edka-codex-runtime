@@ -32,10 +32,10 @@ if [[ "${CODEX_WS_AUTH_MODE}" != "none" ]]; then
     exit 1
 fi
 
-# Provider credentials belong exclusively to the proxy sidecar. Remove
-# accidentally supplied legacy variables before executing any user-controlled
-# command or the Codex app-server.
-unset OPENAI_API_KEY OPENROUTER_API_KEY
+# The OpenAI credential belongs exclusively to the proxy sidecar. Remove an
+# accidentally supplied value before executing user-controlled commands or the
+# Codex app-server.
+unset OPENAI_API_KEY
 
 umask 077
 mkdir -p "${CODEX_HOME}" "${CODEX_HOME}/cache" "${CODEX_HOME}/gh" "${CODEX_HOME}/xdg"

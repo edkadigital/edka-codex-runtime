@@ -201,7 +201,7 @@ func TestProviderUpstreamIsFixedToOpenAI(t *testing.T) {
 
 func TestAuthModeRejectsUnsupportedProvider(t *testing.T) {
 	mode := AuthModeSubscription
-	if err := mode.Set("openrouter_api_key"); err == nil {
+	if err := mode.Set("unsupported"); err == nil {
 		t.Fatal("unsupported authentication mode was accepted")
 	}
 	if mode != AuthModeSubscription {
