@@ -119,7 +119,7 @@ func New(settings Settings, logger *slog.Logger) *Proxy {
 	var provider http.Handler
 	if authMode.IsAPIKey() {
 		provider = newProviderProxy(
-			providerUpstream(authMode),
+			providerUpstream(),
 			settings.ProviderTokenFile,
 			nil,
 			logger,

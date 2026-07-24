@@ -15,13 +15,11 @@ import (
 type AuthMode string
 
 const (
-	AuthModeSubscription     AuthMode = "subscription"
-	AuthModeOpenAIAPIKey     AuthMode = "openai_api_key"
-	AuthModeOpenRouterAPIKey AuthMode = "openrouter_api_key"
+	AuthModeSubscription AuthMode = "subscription"
+	AuthModeOpenAIAPIKey AuthMode = "openai_api_key"
 
 	providerListenAddr = "127.0.0.1:4502"
 	openAIUpstream     = "https://api.openai.com/v1"
-	openRouterUpstream = "https://openrouter.ai/api/v1"
 )
 
 func (mode *AuthMode) Set(value string) error {
@@ -38,21 +36,15 @@ func (mode AuthMode) String() string {
 }
 
 func (mode AuthMode) Valid() bool {
-	return mode == AuthModeSubscription ||
-		mode == AuthModeOpenAIAPIKey ||
-		mode == AuthModeOpenRouterAPIKey
+	return mode == AuthModeSubscription || mode == AuthModeOpenAIAPIKey
 }
 
 func (mode AuthMode) IsAPIKey() bool {
-	return mode == AuthModeOpenAIAPIKey || mode == AuthModeOpenRouterAPIKey
+	return mode == AuthModeOpenAIAPIKey
 }
 
-func providerUpstream(mode AuthMode) *url.URL {
-	rawURL := openAIUpstream
-	if mode == AuthModeOpenRouterAPIKey {
-		rawURL = openRouterUpstream
-	}
-	upstream, err := url.Parse(rawURL)
+func providerUpstream() *url.URL {
+	upstream, err := url.Parse(openAIUpstream)
 	if err != nil {
 		panic(fmt.Sprintf("parse provider upstream: %v", err))
 	}

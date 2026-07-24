@@ -6,7 +6,7 @@ clusters:
 - `ghcr.io/edkaio/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
   Git tooling, and the workspace bootstrap scripts.
 - `ghcr.io/edkaio/edka-codex-proxy` authenticates remote WebSocket connections and injects either
-  short-lived ChatGPT subscription credentials or mounted provider API keys.
+  short-lived ChatGPT subscription credentials or a mounted OpenAI Project API key.
 
 The images are released together as one compatibility bundle. `RUNTIME_VERSION` in `runtime.env`
 is the immutable image tag for both images. The same file pins the upstream Codex, Node.js, and
@@ -20,7 +20,7 @@ runtime images and their compatibility tests.
 
 The runtime supports:
 
-- `openai_api_key`, `openrouter_api_key`, and `subscription` authentication modes;
+- `openai_api_key` and `subscription` authentication modes;
 - signed bearer authentication at the remote WebSocket proxy;
 - headless operation with Codex Apps disabled and Node.js available to bundled plugin MCP servers;
 - crash-safe branch, tag, pull-request ref, and commit-SHA workspace initialization;
@@ -46,25 +46,24 @@ In `subscription` mode, the proxy additionally requires:
 - `EDKA_CODEX_BROKER_URL`
 - `EDKA_CODEX_BROKER_TOKEN_FILE`
 
-In `openai_api_key` or `openrouter_api_key` mode, the proxy does not use the subscription broker.
-It additionally reads `EDKA_CODEX_PROVIDER_TOKEN_FILE` (default
+In `openai_api_key` mode, the proxy does not use the subscription broker. It additionally reads
+`EDKA_CODEX_PROVIDER_TOKEN_FILE` (default
 `/var/run/edka/provider/token`), listens on the fixed loopback address `127.0.0.1:4502`, and
-forwards only `/v1/responses` and `/v1/models` paths to the mode's fixed upstream:
+forwards only `/v1/responses` and `/v1/models` paths to the fixed OpenAI upstream:
 
 - `https://api.openai.com/v1`
-- `https://openrouter.ai/api/v1`
 
-The selected key is mounted only into the proxy container at `/var/run/edka/provider/token`. The
-proxy reads that file for every provider request, replaces a constant non-secret marker bearer
-token, and never places the real key in the environment container's config, environment, arguments,
-or Codex auth file. This keeps provider credentials unavailable to commands executed by Codex and
-allows key rotation without rebuilding the environment.
+The OpenAI Project API key is mounted only into the proxy container at
+`/var/run/edka/provider/token`. The proxy reads that file for every provider request, replaces a
+constant non-secret marker bearer token, and never places the real key in the environment
+container's config, environment, arguments, or Codex auth file. This keeps the credential
+unavailable to commands executed by Codex and allows key rotation without rebuilding the
+environment.
 
-The environment config uses the custom `edka_openai` provider for OpenAI and `openrouter` for
-OpenRouter. Both providers require Codex API-key authentication but disable provider WebSockets.
-At startup, the environment records only the constant marker with `codex login --with-api-key`;
-that makes the remote TUI skip onboarding while all model traffic stays on the loopback HTTP proxy.
-OpenRouter model identifiers keep their `provider/model` form, for example `openai/gpt-5.6-sol`.
+The environment config uses the custom `edka_openai` provider, requires Codex API-key
+authentication, and disables provider WebSockets. At startup, the environment records only a
+constant marker with `codex login --with-api-key`; that makes the remote TUI skip onboarding while
+all model traffic stays on the loopback HTTP proxy.
 
 Optional proxy settings are documented by `codex-proxy --help`.
 

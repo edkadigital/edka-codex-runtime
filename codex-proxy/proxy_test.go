@@ -213,7 +213,7 @@ func TestProxyAuthenticatesRemoteAndOwnsSubscriptionRefresh(t *testing.T) {
 }
 
 func TestProxyPassesThroughAPIKeyWebSocketTraffic(t *testing.T) {
-	for _, authMode := range []AuthMode{AuthModeOpenAIAPIKey, AuthModeOpenRouterAPIKey} {
+	for _, authMode := range []AuthMode{AuthModeOpenAIAPIKey} {
 		t.Run(authMode.String(), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
