@@ -8,7 +8,7 @@ CODEX_APP_SERVER_ADDR="${CODEX_APP_SERVER_ADDR:-ws://127.0.0.1:4501}"
 CODEX_WS_AUTH_MODE="${CODEX_WS_AUTH_MODE:-none}"
 
 case "${CODEX_AUTH_MODE}" in
-    subscription | openai_api_key | openrouter_api_key) ;;
+    subscription | openai_api_key) ;;
     *)
         echo "unsupported CODEX_AUTH_MODE: ${CODEX_AUTH_MODE}" >&2
         exit 1
@@ -57,8 +57,6 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
     fi
     if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" ]]; then
         echo 'model_provider = "edka_openai"'
-    elif [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
-        echo 'model_provider = "openrouter"'
     fi
     echo
     echo '[features]'
@@ -70,14 +68,6 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
         echo
         echo '[model_providers.edka_openai]'
         echo 'name = "OpenAI"'
-        echo 'base_url = "http://127.0.0.1:4502/v1"'
-        echo 'wire_api = "responses"'
-        echo 'requires_openai_auth = true'
-        echo 'supports_websockets = false'
-    elif [[ "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
-        echo
-        echo '[model_providers.openrouter]'
-        echo 'name = "OpenRouter through Edka credential proxy"'
         echo 'base_url = "http://127.0.0.1:4502/v1"'
         echo 'wire_api = "responses"'
         echo 'requires_openai_auth = true'
@@ -94,7 +84,7 @@ if [[ $# -gt 0 ]]; then
     exec "$@"
 fi
 
-if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" || "${CODEX_AUTH_MODE}" == "openrouter_api_key" ]]; then
+if [[ "${CODEX_AUTH_MODE}" == "openai_api_key" ]]; then
     # The remote TUI enters onboarding unless the app-server reports an
     # account. Register a constant, non-secret marker while the provider proxy
     # replaces it with the mounted real key on every upstream request.

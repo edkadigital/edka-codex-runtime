@@ -71,7 +71,6 @@ run_api_mode_test() {
     local auth_mode="$1"
     local model="$2"
     local provider_id="$3"
-    local other_provider_id="$4"
     local mode_root="${test_root}/${auth_mode}"
     local mode_home="${mode_root}/codex-home"
     local args_file="${mode_root}/args"
@@ -92,28 +91,20 @@ run_api_mode_test() {
         CODEX_TEST_LOGIN_ARGS_FILE="${login_args_file}" \
         CODEX_TEST_LOGIN_STDIN_FILE="${login_stdin_file}" \
         OPENAI_API_KEY="must-not-reach-codex-openai" \
-        OPENROUTER_API_KEY="must-not-reach-codex-openrouter" \
+        OPENROUTER_API_KEY="must-not-reach-codex-legacy" \
         "${script_dir}/entrypoint.sh"
 
     local mode_config="${mode_home}/config.toml"
     grep -Fqx "model = \"${model}\"" "${mode_config}"
     grep -Fqx "model_provider = \"${provider_id}\"" "${mode_config}"
     grep -Fqx "[model_providers.${provider_id}]" "${mode_config}"
-    if [[ "${auth_mode}" == "openai_api_key" ]]; then
-        grep -Fqx 'name = "OpenAI"' "${mode_config}"
-    else
-        grep -Fqx 'name = "OpenRouter through Edka credential proxy"' "${mode_config}"
-    fi
+    grep -Fqx 'name = "OpenAI"' "${mode_config}"
     grep -Fqx 'base_url = "http://127.0.0.1:4502/v1"' "${mode_config}"
     grep -Fqx 'wire_api = "responses"' "${mode_config}"
     grep -Fqx 'requires_openai_auth = true' "${mode_config}"
     grep -Fqx 'supports_websockets = false' "${mode_config}"
     if grep -Fq "[model_providers.${provider_id}.auth]" "${mode_config}"; then
         echo "${auth_mode} config unexpectedly contains provider auth commands" >&2
-        exit 1
-    fi
-    if grep -Fq "${other_provider_id}" "${mode_config}"; then
-        echo "${auth_mode} config unexpectedly contains ${other_provider_id}" >&2
         exit 1
     fi
     if grep -Eq 'env_key|must-not-reach-codex|OPENAI_API_KEY|OPENROUTER_API_KEY' \
@@ -130,13 +121,16 @@ run_api_mode_test() {
 run_api_mode_test \
     "openai_api_key" \
     "gpt-5.6-sol" \
-    "edka_openai" \
-    "model_providers.openrouter"
-run_api_mode_test \
-    "openrouter_api_key" \
-    "openai/gpt-5.6-sol" \
-    "openrouter" \
-    "model_providers.edka_openai"
+    "edka_openai"
+
+if CODEX_HOME="${test_root}/unsupported-auth-home" \
+    GIT_CONFIG_GLOBAL="${test_root}/unsupported-auth-gitconfig" \
+    WORKSPACE_DIR="/workspace" \
+    CODEX_AUTH_MODE="openrouter_api_key" \
+    "${script_dir}/entrypoint.sh" true 2>/dev/null; then
+    echo "entrypoint accepted an unsupported authentication mode" >&2
+    exit 1
+fi
 
 if CODEX_HOME="${test_root}/invalid-ws-auth-home" \
     GIT_CONFIG_GLOBAL="${test_root}/invalid-ws-auth-gitconfig" \

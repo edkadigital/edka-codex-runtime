@@ -183,8 +183,8 @@ jobs:
           grep -F -- "--ws-auth" <<<"${app_server_help}"
           grep -F -- "--ws-shared-secret-file" <<<"${app_server_help}"
           docker run --rm \
-            --env CODEX_AUTH_MODE=openrouter_api_key \
-            --env CODEX_MODEL=openai/gpt-5.6-sol \
+            --env CODEX_AUTH_MODE=openai_api_key \
+            --env CODEX_MODEL=gpt-5.6-sol \
             --volume "${PWD}/codex-env/account_probe.mjs:/tmp/account_probe.mjs:ro" \
             --entrypoint bash \
             "${image}" \

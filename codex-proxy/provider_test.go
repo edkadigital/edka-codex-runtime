@@ -193,33 +193,35 @@ func TestProviderProxyRejectsMethodsOutsideProviderContract(t *testing.T) {
 	}
 }
 
-func TestProviderUpstreamsAreFixedByAuthenticationMode(t *testing.T) {
-	tests := map[AuthMode]string{
-		AuthModeOpenAIAPIKey:     openAIUpstream,
-		AuthModeOpenRouterAPIKey: openRouterUpstream,
+func TestProviderUpstreamIsFixedToOpenAI(t *testing.T) {
+	if actual := providerUpstream().String(); actual != openAIUpstream {
+		t.Errorf("provider upstream = %q, want %q", actual, openAIUpstream)
 	}
-	for authMode, expected := range tests {
-		if actual := providerUpstream(authMode).String(); actual != expected {
-			t.Errorf("%s upstream = %q, want %q", authMode, actual, expected)
-		}
+}
+
+func TestAuthModeRejectsUnsupportedProvider(t *testing.T) {
+	mode := AuthModeSubscription
+	if err := mode.Set("openrouter_api_key"); err == nil {
+		t.Fatal("unsupported authentication mode was accepted")
+	}
+	if mode != AuthModeSubscription {
+		t.Fatalf("rejected authentication mode changed the active mode to %q", mode)
 	}
 }
 
 func TestAPIKeySettingsDoNotRequireSubscriptionBroker(t *testing.T) {
-	for _, authMode := range []AuthMode{AuthModeOpenAIAPIKey, AuthModeOpenRouterAPIKey} {
-		settings := Settings{
-			AuthMode:          authMode,
-			Addr:              ":4500",
-			Upstream:          "ws://127.0.0.1:4501",
-			ProviderAddr:      "127.0.0.1:4502",
-			ProviderTokenFile: "/var/run/edka/provider/token",
-			SharedSecretFile:  "/var/run/edka/ws/secret",
-			Issuer:            "edka",
-			Audience:          "environment-1",
-		}
-		if err := settings.Validate(); err != nil {
-			t.Errorf("%s unexpectedly required a subscription broker: %v", authMode, err)
-		}
+	settings := Settings{
+		AuthMode:          AuthModeOpenAIAPIKey,
+		Addr:              ":4500",
+		Upstream:          "ws://127.0.0.1:4501",
+		ProviderAddr:      "127.0.0.1:4502",
+		ProviderTokenFile: "/var/run/edka/provider/token",
+		SharedSecretFile:  "/var/run/edka/ws/secret",
+		Issuer:            "edka",
+		Audience:          "environment-1",
+	}
+	if err := settings.Validate(); err != nil {
+		t.Errorf("OpenAI API-key mode unexpectedly required a subscription broker: %v", err)
 	}
 }
 
