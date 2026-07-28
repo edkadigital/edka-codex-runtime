@@ -122,7 +122,20 @@ trap cleanup_clone_dir EXIT
 mkdir -- "${stage_dir}"
 : >"${stage_dir}/${STAGE_MARKER_NAME}"
 
-if git ls-remote --exit-code --heads "${GIT_REPOSITORY_URL}" "${GIT_REF}" >/dev/null 2>&1 ||
+if [[ -n "${GIT_PR_NUMBER:-}" ]]; then
+    # Review checkout: fetch the PR head ref from the base repository. This is
+    # fork-safe (the base repo advertises refs/pull/N/head) and pins to the
+    # exact SHA the review was requested for: a head that moved since
+    # resolution fails loudly instead of silently reviewing newer commits.
+    git init "${clone_dir}"
+    git -C "${clone_dir}" remote add origin "${GIT_REPOSITORY_URL}"
+    git -C "${clone_dir}" fetch --depth=1 origin "refs/pull/${GIT_PR_NUMBER}/head"
+    if ! git -C "${clone_dir}" cat-file -e "${GIT_REF}^{commit}" 2>/dev/null; then
+        echo "PR #${GIT_PR_NUMBER} head no longer matches the pinned SHA ${GIT_REF}; recreate the review environment." >&2
+        exit 1
+    fi
+    git -C "${clone_dir}" checkout --detach "${GIT_REF}"
+elif git ls-remote --exit-code --heads "${GIT_REPOSITORY_URL}" "${GIT_REF}" >/dev/null 2>&1 ||
     git ls-remote --exit-code --tags "${GIT_REPOSITORY_URL}" "${GIT_REF}" >/dev/null 2>&1; then
     # Preserve a normal branch checkout when the requested ref is an advertised
     # branch or tag. This keeps branch-based environments ready to commit/push.
@@ -136,6 +149,28 @@ else
     git -C "${clone_dir}" remote add origin "${GIT_REPOSITORY_URL}"
     git -C "${clone_dir}" fetch --depth=1 origin "${GIT_REF}"
     git -C "${clone_dir}" checkout --detach FETCH_HEAD
+fi
+
+if [[ -n "${GIT_BASE_REF:-}" ]]; then
+    # Materialize the PR's base while credentials still exist (review
+    # environments never see the token after this init container). Bounded
+    # deepening first; a full unshallow only as the correctness fallback.
+    git -C "${clone_dir}" fetch --depth=200 origin "${GIT_BASE_REF}"
+    git -C "${clone_dir}" branch -f edka-review-base FETCH_HEAD
+    git -C "${clone_dir}" fetch --deepen=200 origin || true
+    if ! git -C "${clone_dir}" merge-base HEAD edka-review-base >/dev/null 2>&1; then
+        git -C "${clone_dir}" fetch --unshallow origin || true
+    fi
+    if ! merge_base="$(git -C "${clone_dir}" merge-base HEAD edka-review-base)"; then
+        echo "Unable to find a merge base between ${GIT_REF} and ${GIT_BASE_REF}" >&2
+        exit 1
+    fi
+    # Reviewers read this instead of rediscovering the diff boundary.
+    {
+        printf 'BASE_REF=%s\n' "${GIT_BASE_REF}"
+        printf 'BASE_LOCAL_BRANCH=edka-review-base\n'
+        printf 'MERGE_BASE=%s\n' "${merge_base}"
+    } >"${clone_dir}/.edka-review"
 fi
 
 shopt -s dotglob nullglob

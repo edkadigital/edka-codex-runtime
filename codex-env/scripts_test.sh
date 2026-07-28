@@ -212,6 +212,44 @@ run_clone "${stale_workspace}"
 [[ -f "${stale_workspace}/README.md" ]]
 [[ ! -e "${stale_workspace}/.edka-clone-stale" ]]
 
+# Review checkout: PR head fetched via refs/pull/N/head, pinned to the exact
+# SHA, with the base branch materialized and the merge base recorded.
+git -C "${source_repo}" checkout -b feature "${first_commit}" >/dev/null 2>&1
+printf '%s\n' 'feature content' >"${source_repo}/FEATURE.md"
+git -C "${source_repo}" add FEATURE.md
+git -C "${source_repo}" commit -m 'Add feature fixture' >/dev/null
+feature_commit="$(git -C "${source_repo}" rev-parse HEAD)"
+git -C "${source_repo}" update-ref refs/pull/7/head "${feature_commit}"
+git -C "${source_repo}" checkout main >/dev/null 2>&1
+
+review_workspace="${test_root}/review-workspace"
+WORKSPACE_DIR="${review_workspace}" \
+    GITHUB_TOKEN_FILE="${token_file}" \
+    GIT_REPOSITORY_URL="file://${source_repo}" \
+    GIT_REF="${feature_commit}" \
+    GIT_PR_NUMBER="7" \
+    GIT_BASE_REF="main" \
+    "${script_dir}/clone.sh" >/dev/null
+[[ "$(git -C "${review_workspace}" rev-parse HEAD)" == "${feature_commit}" ]]
+[[ -f "${review_workspace}/FEATURE.md" ]]
+[[ -f "${review_workspace}/.edka-review" ]]
+grep -q "MERGE_BASE=${first_commit}" "${review_workspace}/.edka-review"
+grep -q 'BASE_LOCAL_BRANCH=edka-review-base' "${review_workspace}/.edka-review"
+[[ "$(git -C "${review_workspace}" rev-parse edka-review-base)" == "$(git -C "${source_repo}" rev-parse main)" ]]
+
+# A moved PR head must fail loudly instead of reviewing newer commits.
+moved_head_workspace="${test_root}/moved-head-workspace"
+if WORKSPACE_DIR="${moved_head_workspace}" \
+    GITHUB_TOKEN_FILE="${token_file}" \
+    GIT_REPOSITORY_URL="file://${source_repo}" \
+    GIT_REF="0000000000000000000000000000000000000000" \
+    GIT_PR_NUMBER="7" \
+    GIT_BASE_REF="main" \
+    "${script_dir}/clone.sh" >/dev/null 2>&1; then
+    echo 'clone.sh accepted a review checkout whose PR head moved' >&2
+    exit 1
+fi
+
 occupied_workspace="${test_root}/occupied-workspace"
 mkdir -p "${occupied_workspace}"
 printf '%s\n' 'user data' >"${occupied_workspace}/keep"
