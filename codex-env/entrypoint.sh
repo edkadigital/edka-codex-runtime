@@ -44,8 +44,12 @@ export GH_CONFIG_DIR="${GH_CONFIG_DIR:-${CODEX_HOME}/gh}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${CODEX_HOME}/cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${CODEX_HOME}/xdg}"
 
+# The fallback email must never use users.noreply.github.com: GitHub maps
+# those addresses to whichever account owns the local-part username, so an
+# unclaimed name hands commit attribution to a squatter. The control plane
+# passes the App bot identity; this default stays unattributed.
 git config --global user.name "${GIT_USER_NAME:-Edka Codex Agent}"
-git config --global user.email "${GIT_USER_EMAIL:-codex-agent@users.noreply.github.com}"
+git config --global user.email "${GIT_USER_EMAIL:-codex-env@noreply.edka.io}"
 git config --global credential.helper edka
 
 config_tmp="${CODEX_HOME}/config.toml.tmp"
