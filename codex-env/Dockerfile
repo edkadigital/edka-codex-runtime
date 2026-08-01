@@ -32,9 +32,22 @@ RUN apt-get update \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Full node toolchain, not just the binary: npm/npx/corepack live under
+# /usr/local/lib/node_modules, and without them environments cannot install
+# dependencies, so coding and review runs cannot verify builds or tests.
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-RUN test "$(node --version)" = "v${NODE_VERSION}"
+# corepack enable installs pnpm and yarn shims; they fetch their pinned
+# version on first use inside the environment.
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && ln -s /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && corepack enable \
+    && test "$(node --version)" = "v${NODE_VERSION}" \
+    && npm --version \
+    && command -v pnpm \
+    && command -v yarn
 
 RUN set -eux; \
     case "${TARGETARCH}" in \
