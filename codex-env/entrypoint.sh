@@ -56,6 +56,25 @@ git config --global credential.helper edka
 # managed workspace path.
 git config --global safe.directory "${WORKSPACE_DIR}"
 
+# When CODEX_HOME persists inside the workspace checkout, the session
+# transcripts it holds must never become committable: shield its top-level
+# directory through .git/info/exclude. The exclude file is local-only, lives
+# on the same volume, and keeps the directory invisible to `git add -A` and
+# plain `git clean -fd`.
+case "${CODEX_HOME}" in
+    "${WORKSPACE_DIR}"/*)
+        if [[ -d "${WORKSPACE_DIR}/.git" && ! -L "${WORKSPACE_DIR}/.git" ]]; then
+            codex_home_relative="${CODEX_HOME#"${WORKSPACE_DIR}"/}"
+            codex_home_exclude="/${codex_home_relative%%/*}/"
+            mkdir -p "${WORKSPACE_DIR}/.git/info"
+            if ! grep -qxF -- "${codex_home_exclude}" \
+                "${WORKSPACE_DIR}/.git/info/exclude" 2>/dev/null; then
+                printf '%s\n' "${codex_home_exclude}" >>"${WORKSPACE_DIR}/.git/info/exclude"
+            fi
+        fi
+        ;;
+esac
+
 config_tmp="${CODEX_HOME}/config.toml.tmp"
 {
     echo 'approval_policy = "never"'

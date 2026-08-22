@@ -49,6 +49,23 @@ if grep -Fq '[model_providers.' "${config_file}"; then
     exit 1
 fi
 
+# A workspace-resident CODEX_HOME is shielded from git so session transcripts
+# can never be committed; the exclusion is anchored, directory-only, and
+# idempotent across restarts.
+persist_workspace="${test_root}/persist-workspace"
+mkdir -p "${persist_workspace}/.git/info"
+CODEX_HOME="${persist_workspace}/.codex" \
+    GIT_CONFIG_GLOBAL="${test_root}/persist-gitconfig" \
+    WORKSPACE_DIR="${persist_workspace}" \
+    CODEX_AUTH_MODE="subscription" \
+    "${script_dir}/entrypoint.sh" true
+CODEX_HOME="${persist_workspace}/.codex" \
+    GIT_CONFIG_GLOBAL="${test_root}/persist-gitconfig" \
+    WORKSPACE_DIR="${persist_workspace}" \
+    CODEX_AUTH_MODE="subscription" \
+    "${script_dir}/entrypoint.sh" true
+[[ "$(grep -cxF '/.codex/' "${persist_workspace}/.git/info/exclude")" == "1" ]]
+
 fake_bin="${test_root}/fake-bin"
 mkdir -p "${fake_bin}"
 fake_codex="${fake_bin}/codex"
