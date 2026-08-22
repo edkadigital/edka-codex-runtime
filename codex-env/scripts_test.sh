@@ -35,6 +35,8 @@ CODEX_HOME="${codex_home}" \
     CODEX_AUTH_MODE="subscription" \
     "${script_dir}/entrypoint.sh" true
 
+[[ "$(git config --file "${git_config}" --get-all safe.directory)" == "/workspace" ]]
+
 config_file="${codex_home}/config.toml"
 grep -Fqx 'approval_policy = "never"' "${config_file}"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "${config_file}"
@@ -181,6 +183,13 @@ run_clone "${workspace}"
 [[ "$(<"${workspace}/.git/edka-workspace-ready")" == "1" ]]
 [[ -d "${workspace}/lost+found" ]]
 run_clone "${workspace}"
+# A restarted init container revalidates the checkout on a volume whose root
+# is owned by root, which git's dubious-ownership protection would reject.
+# GIT_TEST_ASSUME_DIFFERENT_OWNER simulates that mismatch; the scoped
+# safe.directory grant must keep revalidation working.
+GIT_TEST_ASSUME_DIFFERENT_OWNER=1 run_clone "${workspace}"
+[[ -f "${workspace}/README.md" ]]
+[[ "$(<"${workspace}/.git/edka-workspace-ready")" == "1" ]]
 chmod 700 "${workspace}/lost+found"
 
 commit_workspace="${test_root}/commit-workspace"

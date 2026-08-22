@@ -51,6 +51,10 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${CODEX_HOME}/xdg}"
 git config --global user.name "${GIT_USER_NAME:-Edka Codex Agent}"
 git config --global user.email "${GIT_USER_EMAIL:-codex-env@noreply.edka.io}"
 git config --global credential.helper edka
+# The workspace volume root is owned by root (fsGroup only fixes the group),
+# so git would refuse the checkout as dubiously owned. Trust exactly the
+# managed workspace path.
+git config --global safe.directory "${WORKSPACE_DIR}"
 
 config_tmp="${CODEX_HOME}/config.toml.tmp"
 {

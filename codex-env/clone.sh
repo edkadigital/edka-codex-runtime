@@ -28,6 +28,15 @@ if [[ "${GIT_REF}" == -* || "${GIT_REF}" == *$'\n'* ]]; then
     exit 1
 fi
 
+# The workspace volume root is owned by root — fsGroup only fixes the group —
+# so git's dubious-ownership protection rejects the repository whenever a
+# restarted init container revalidates an existing checkout. Trust exactly the
+# managed workspace path. Environment config reaches every git invocation in
+# this script; a config file would need a writable HOME this container lacks.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0="safe.directory"
+export GIT_CONFIG_VALUE_0="${WORKSPACE_DIR}"
+
 mkdir -p "${WORKSPACE_DIR}"
 ready_marker="${WORKSPACE_DIR}/.git/${READY_MARKER_NAME}"
 progress_marker="${WORKSPACE_DIR}/${PROGRESS_MARKER_NAME}"
