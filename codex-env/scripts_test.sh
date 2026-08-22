@@ -43,6 +43,8 @@ grep -Fqx 'approval_policy = "never"' "${config_file}"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "${config_file}"
 grep -Fqx '[features]' "${config_file}"
 grep -Fqx 'apps = false' "${config_file}"
+grep -Fqx 'plugins = false' "${config_file}"
+grep -Fqx 'remote_plugin = false' "${config_file}"
 grep -Fqx '[projects."/workspace"]' "${config_file}"
 grep -Fqx 'trust_level = "trusted"' "${config_file}"
 if grep -Fq '[model_providers.' "${config_file}"; then

@@ -99,6 +99,8 @@ config_tmp="${CODEX_HOME}/config.toml.tmp"
     echo
     echo '[features]'
     echo 'apps = false'
+    echo 'plugins = false'
+    echo 'remote_plugin = false'
     echo
     printf '[projects."%s"]\n' "${WORKSPACE_DIR}"
     echo 'trust_level = "trusted"'
