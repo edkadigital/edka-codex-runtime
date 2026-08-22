@@ -75,6 +75,17 @@ case "${CODEX_HOME}" in
         ;;
 esac
 
+# Codex 0.149 forbids `rm -f`-style commands under approval_policy=never
+# unless an explicit exec-policy rule matches them first. This pod is the
+# sandbox — a single-tenant container on an isolated volume running with
+# danger-full-access by contract — so blanket-forbidding rm only breaks
+# routine cleanup (node_modules, build output). Allow it explicitly through
+# an Edka-managed rules file; codex appends its own session approvals to
+# default.rules, so this file stays ours to overwrite.
+mkdir -p "${CODEX_HOME}/rules"
+printf '%s\n' 'prefix_rule(pattern=["rm"], decision="allow")' \
+    >"${CODEX_HOME}/rules/edka.rules"
+
 config_tmp="${CODEX_HOME}/config.toml.tmp"
 {
     echo 'approval_policy = "never"'

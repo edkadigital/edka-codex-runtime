@@ -36,6 +36,7 @@ CODEX_HOME="${codex_home}" \
     "${script_dir}/entrypoint.sh" true
 
 [[ "$(git config --file "${git_config}" --get-all safe.directory)" == "/workspace" ]]
+grep -qxF 'prefix_rule(pattern=["rm"], decision="allow")' "${codex_home}/rules/edka.rules"
 
 config_file="${codex_home}/config.toml"
 grep -Fqx 'approval_policy = "never"' "${config_file}"
