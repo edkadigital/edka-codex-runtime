@@ -110,7 +110,8 @@ docker build -t edka-codex-proxy:dev codex-proxy
 Codex upgrades are automated. The `Update Codex` workflow runs nightly, pins the newest stable
 `rust-v` release from `openai/codex` with fresh checksums as `<codex-version>-edka.1`, pushes the
 bump to a `codex/bump-<codex-version>` branch, and runs CI on it. When CI passes it fast-forwards
-`main`, pushes the release tag, and starts the release workflow. When CI fails the branch and the
+`main`, pushes the release tag, and runs the release workflow, waiting for it to finish so the update
+run fails when the release does. When CI fails the branch and the
 failed run stay behind for inspection, and the next nightly run retries. Run the workflow manually to
 pin a specific version or to preview a bump with `dry_run`. The same resolution logic is available
 locally:

@@ -111,37 +111,12 @@ jobs:
       - name: Run CI on the bump
         if: steps.push.outcome == 'success'
         shell: bash
-        env:
-          BRANCH: ${{ steps.push.outputs.branch }}
-          HEAD_SHA: ${{ steps.push.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          # Pushes made with GITHUB_TOKEN never trigger push or pull_request
-          # workflows, so CI has to be dispatched explicitly.
-          gh workflow run ci.yml --ref "${BRANCH}"
-          run_id=""
-          for _ in $(seq 1 30); do
-            sleep 10
-            run_id="$(
-              gh run list --workflow ci.yml --branch "${BRANCH}" --event workflow_dispatch \
-                --json databaseId,headSha \
-                --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | .databaseId" |
-                head -n 1
-            )"
-            if [[ -n "${run_id}" ]]; then
-              break
-            fi
-          done
-          if [[ -z "${run_id}" ]]; then
-            echo "::error::CI run for ${BRANCH} did not start"
-            exit 1
-          fi
-          echo "CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-          echo "CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-            >> "${GITHUB_STEP_SUMMARY}"
-          gh run watch "${run_id}" --interval 15 --exit-status
+        run: >-
+          .github/scripts/dispatch-and-wait.sh ci.yml
+          "${{ steps.push.outputs.branch }}"
+          "${{ steps.push.outputs.head_sha }}"
 
-      - name: Fast-forward main, tag, and release
+      - name: Fast-forward main and tag
         if: steps.push.outcome == 'success'
         shell: bash
         env:
@@ -156,10 +131,16 @@ jobs:
           git push origin "${HEAD_SHA}:refs/heads/main"
           git tag "${TAG}" "${HEAD_SHA}"
           git push origin "refs/tags/${TAG}"
-          # Tags pushed with GITHUB_TOKEN never trigger the tag workflow either.
-          gh workflow run release.yml --ref "${TAG}"
           git push origin --delete "${BRANCH}"
           {
             echo
-            echo "Pushed the bump to main as ${HEAD_SHA}, pushed \`${TAG}\`, and started the release workflow."
+            echo "Pushed the bump to main as ${HEAD_SHA} and pushed \`${TAG}\`."
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Release
+        if: steps.push.outcome == 'success'
+        shell: bash
+        run: >-
+          .github/scripts/dispatch-and-wait.sh release.yml
+          "${{ steps.push.outputs.tag }}"
+          "${{ steps.push.outputs.head_sha }}"
