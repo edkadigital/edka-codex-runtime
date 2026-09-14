@@ -85,7 +85,12 @@ for arch in x86_64 aarch64; do
   curl --fail --silent --show-error --location --retry 3 --retry-delay 5 \
     --output "${workdir}/${archive}" "${url}"
   # Make sure the archive is a real Codex package before trusting its checksum.
-  tar --list --gzip --file "${workdir}/${archive}" | grep -qx 'bin/codex'
+  # grep must consume the whole listing: with -q it would exit early and tar
+  # would fail the pipeline with a write error under pipefail.
+  if ! tar --list --gzip --file "${workdir}/${archive}" | grep -x 'bin/codex' >/dev/null; then
+    echo "::error::${archive} does not contain bin/codex" >&2
+    exit 1
+  fi
   checksums["${arch}"]="$(sha256_of "${workdir}/${archive}")"
   echo "${archive}: ${checksums["${arch}"]}"
 done
