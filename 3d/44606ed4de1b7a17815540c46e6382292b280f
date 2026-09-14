@@ -1,0 +1,19 @@
+.github/scripts/bump-codex.sh
+  s_af2ff14018a7a7::t_e10dcb0d09bda4 88-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3d44606ed4de1b7a17815540c46e6382292b280f",
+  "prompts": {},
+  "sessions": {
+    "s_af2ff14018a7a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30f05ec7-6c69-476d-ad60-5899ac53608f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Camil Blanaru <camil@edka.io>"
+    }
+  }
+}
