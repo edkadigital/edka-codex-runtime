@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # Dispatched by the Update Codex workflow, whose pushes cannot trigger CI.
+  workflow_dispatch:
 
 concurrency:
   group: codex-runtime-ci-${{ github.ref }}

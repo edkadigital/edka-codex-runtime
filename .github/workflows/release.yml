@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+  # Dispatched on a release tag by the Update Codex workflow.
+  workflow_dispatch:
 
 concurrency:
   group: codex-runtime-release-${{ github.ref }}

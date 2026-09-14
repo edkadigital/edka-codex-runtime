@@ -107,6 +107,18 @@ docker build -t edka-codex-proxy:dev codex-proxy
 3. Merge the verified change to `main`.
 4. Source `runtime.env`, then create and push `v${RUNTIME_VERSION}`.
 
+Codex upgrades are automated. The `Update Codex` workflow runs nightly, pins the newest stable
+`rust-v` release from `openai/codex` with fresh checksums as `<codex-version>-edka.1`, pushes the
+bump to a `codex/bump-<codex-version>` branch, and runs CI on it. When CI passes it fast-forwards
+`main`, pushes the release tag, and starts the release workflow. When CI fails the branch and the
+failed run stay behind for inspection, and the next nightly run retries. Run the workflow manually to
+pin a specific version or to preview a bump with `dry_run`. The same resolution logic is available
+locally:
+
+```bash
+.github/scripts/bump-codex.sh
+```
+
 The tag workflow builds both architectures on native runners, publishes both immutable bundle
 tags, updates `latest`, verifies that both GHCR packages are public, and creates one GitHub release
 with a `bundle.json` manifest. Existing immutable tags are never overwritten.

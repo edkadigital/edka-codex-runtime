@@ -1,0 +1,165 @@
+name: Update Codex
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      codex_version:
+        description: Pin this upstream Codex version instead of the newest stable release
+        required: false
+        type: string
+      dry_run:
+        description: Only compute the bump; do not push or release anything
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: codex-runtime-update-codex
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  bump:
+    name: Bump Codex to the newest stable release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Resolve newest Codex release
+        id: bump
+        env:
+          CODEX_TARGET_VERSION: ${{ inputs.codex_version }}
+        run: .github/scripts/bump-codex.sh
+
+      - name: Report up to date
+        if: steps.bump.outputs.updated != 'true'
+        shell: bash
+        run: |
+          echo "runtime.env already pins Codex ${{ steps.bump.outputs.codex_version }}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Show pending change
+        if: steps.bump.outputs.updated == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --no-pager diff runtime.env
+          {
+            echo "## Codex ${{ steps.bump.outputs.previous_codex_version }} -> ${{ steps.bump.outputs.codex_version }}"
+            echo
+            echo "Upstream release: https://github.com/openai/codex/releases/tag/rust-v${{ steps.bump.outputs.codex_version }}"
+            echo
+            echo '```diff'
+            git --no-pager diff runtime.env
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Push bump branch
+        id: push
+        if: steps.bump.outputs.updated == 'true' && inputs.dry_run != true
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.bump.outputs.codex_version }}
+          PREVIOUS_CODEX_VERSION: ${{ steps.bump.outputs.previous_codex_version }}
+          RUNTIME_VERSION: ${{ steps.bump.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          branch="codex/bump-${CODEX_VERSION}"
+          tag="v${RUNTIME_VERSION}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Tag ${tag} already exists but main still pins Codex ${PREVIOUS_CODEX_VERSION}; resolve this manually"
+            exit 1
+          fi
+
+          # Bump branches for other versions are leftovers of failed runs; this bump supersedes them.
+          git ls-remote --heads origin 'refs/heads/codex/bump-*' |
+            awk '{print $2}' |
+            sed 's#^refs/heads/##' |
+            while read -r stale; do
+              if [[ "${stale}" != "${branch}" ]]; then
+                echo "Deleting superseded branch ${stale}"
+                git push origin --delete "${stale}"
+              fi
+            done
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "${branch}"
+          git commit --all --message "Bump Codex to ${CODEX_VERSION}"
+          # The branch belongs to this workflow; a rerun replaces any earlier attempt.
+          git push --force origin "${branch}"
+          {
+            echo "branch=${branch}"
+            echo "tag=${tag}"
+            echo "head_sha=$(git rev-parse HEAD)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Run CI on the bump
+        if: steps.push.outcome == 'success'
+        shell: bash
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+          HEAD_SHA: ${{ steps.push.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # Pushes made with GITHUB_TOKEN never trigger push or pull_request
+          # workflows, so CI has to be dispatched explicitly.
+          gh workflow run ci.yml --ref "${BRANCH}"
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 10
+            run_id="$(
+              gh run list --workflow ci.yml --branch "${BRANCH}" --event workflow_dispatch \
+                --json databaseId,headSha \
+                --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | .databaseId" |
+                head -n 1
+            )"
+            if [[ -n "${run_id}" ]]; then
+              break
+            fi
+          done
+          if [[ -z "${run_id}" ]]; then
+            echo "::error::CI run for ${BRANCH} did not start"
+            exit 1
+          fi
+          echo "CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+          gh run watch "${run_id}" --interval 15 --exit-status
+
+      - name: Fast-forward main, tag, and release
+        if: steps.push.outcome == 'success'
+        shell: bash
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+          HEAD_SHA: ${{ steps.push.outputs.head_sha }}
+          TAG: ${{ steps.push.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The bump commit sits directly on top of the main that was checked
+          # out; if main moved meanwhile this push is rejected and the next
+          # nightly run starts over from the new main.
+          git push origin "${HEAD_SHA}:refs/heads/main"
+          git tag "${TAG}" "${HEAD_SHA}"
+          git push origin "refs/tags/${TAG}"
+          # Tags pushed with GITHUB_TOKEN never trigger the tag workflow either.
+          gh workflow run release.yml --ref "${TAG}"
+          git push origin --delete "${BRANCH}"
+          {
+            echo
+            echo "Pushed the bump to main as ${HEAD_SHA}, pushed \`${TAG}\`, and started the release workflow."
+          } >> "${GITHUB_STEP_SUMMARY}"
