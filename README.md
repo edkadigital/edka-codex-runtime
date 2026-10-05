@@ -3,9 +3,9 @@
 `edka-codex-runtime` builds the two containers used by Codex environments in Edka-managed
 clusters:
 
-- `ghcr.io/edkaio/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
+- `ghcr.io/edkadigital/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
   Git tooling, and the workspace bootstrap scripts.
-- `ghcr.io/edkaio/edka-codex-proxy` authenticates remote WebSocket connections and injects either
+- `ghcr.io/edkadigital/edka-codex-proxy` authenticates remote WebSocket connections and injects either
   short-lived ChatGPT subscription credentials or a mounted OpenAI Project API key.
 
 The images are released together as one compatibility bundle. `RUNTIME_VERSION` in `runtime.env`

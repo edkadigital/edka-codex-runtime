@@ -1,4 +1,4 @@
-module github.com/edkaio/edka-codex-runtime/codex-proxy
+module github.com/edkadigital/edka-codex-runtime/codex-proxy
 
 go 1.26.0
 

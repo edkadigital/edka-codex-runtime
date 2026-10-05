@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CODEX_ENV_IMAGE: ghcr.io/edkaio/edka-codex-env
-  CODEX_PROXY_IMAGE: ghcr.io/edkaio/edka-codex-proxy
+  CODEX_ENV_IMAGE: ghcr.io/edkadigital/edka-codex-env
+  CODEX_PROXY_IMAGE: ghcr.io/edkadigital/edka-codex-proxy
 
 jobs:
   prepare:
@@ -154,22 +154,22 @@ jobs:
       matrix:
         include:
           - component: codex-env
-            image: ghcr.io/edkaio/edka-codex-env
+            image: ghcr.io/edkadigital/edka-codex-env
             arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
           - component: codex-env
-            image: ghcr.io/edkaio/edka-codex-env
+            image: ghcr.io/edkadigital/edka-codex-env
             arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           - component: codex-proxy
-            image: ghcr.io/edkaio/edka-codex-proxy
+            image: ghcr.io/edkadigital/edka-codex-proxy
             arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
           - component: codex-proxy
-            image: ghcr.io/edkaio/edka-codex-proxy
+            image: ghcr.io/edkadigital/edka-codex-proxy
             arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -260,9 +260,9 @@ jobs:
       matrix:
         include:
           - component: codex-env
-            image: ghcr.io/edkaio/edka-codex-env
+            image: ghcr.io/edkadigital/edka-codex-env
           - component: codex-proxy
-            image: ghcr.io/edkaio/edka-codex-proxy
+            image: ghcr.io/edkadigital/edka-codex-proxy
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -343,11 +343,11 @@ jobs:
           for package in edka-codex-env edka-codex-proxy; do
             visibility="$(
               gh api \
-                "/orgs/edkaio/packages/container/${package}" \
+                "/orgs/edkadigital/packages/container/${package}" \
                 --jq '.visibility'
             )"
             if [[ "${visibility}" != "public" ]]; then
-              echo "::error::ghcr.io/edkaio/${package} must be made public in GitHub package settings before customer clusters can pull it."
+              echo "::error::ghcr.io/edkadigital/${package} must be made public in GitHub package settings before customer clusters can pull it."
               exit 1
             fi
           done
