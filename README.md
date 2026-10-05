@@ -1,91 +1,116 @@
 # edka-codex-runtime
 
-`edka-codex-runtime` builds the two containers used by Codex environments in Edka-managed
-clusters:
+The two container images behind Codex environments on [Edka](https://edka.io). An environment is a pod in your own Kubernetes cluster with one GitHub repository checked out. You attach to it from the [Codex CLI](https://github.com/openai/codex) on your machine, and Codex runs its commands in the pod. Setup and usage are in the [Codex environments docs](https://edka.io/docs/agents/codex/).
 
-- `ghcr.io/edkadigital/edka-codex-env` contains the pinned Codex CLI, Node.js runtime, GitHub CLI,
-  Git tooling, and the workspace bootstrap scripts.
-- `ghcr.io/edkadigital/edka-codex-proxy` authenticates remote WebSocket connections and injects either
-  short-lived ChatGPT subscription credentials or a mounted OpenAI Project API key.
+```
+ghcr.io/edkadigital/edka-codex-env:0.160.0-edka.2
+ghcr.io/edkadigital/edka-codex-proxy:0.160.0-edka.2
+```
 
-The images are released together as one compatibility bundle. `RUNTIME_VERSION` in `runtime.env`
-is the immutable image tag for both images. The same file pins the upstream Codex, Node.js, and
-GitHub CLI versions, plus SHA-256 checksums for the downloaded Codex and GitHub CLI artifacts.
+## The environment pod
 
-## Runtime contract
+| Container | Image | What it does |
+| --- | --- | --- |
+| `clone` (init) | `edka-codex-env` | Clones the repository into the workspace volume at a branch, tag, pull request or commit. A finished checkout survives pod restarts. |
+| `codex` | `edka-codex-env` | Runs `codex app-server` on `127.0.0.1:4501` with the workspace as a trusted project. |
+| `codex-proxy` | `edka-codex-proxy` | Listens on port `4500`, the only port reachable from outside the pod. Checks each connection's token, forwards it to the app-server and supplies the model credential. |
 
-Edka creates the Kubernetes resources, mounts repository-scoped GitHub credentials, and supplies
-the environment variables and token files consumed by these images. This repository owns only the
-runtime images and their compatibility tests.
+Codex runs with `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`, so the pod is the sandbox. Edka runs every container as UID `1000` with a read-only root filesystem, no Linux capabilities and no service account token. The environment image has Node.js, npm, pnpm, yarn, Git and the GitHub CLI.
 
-The runtime supports:
+## Where each credential lives
 
-- `openai_api_key` and `subscription` authentication modes;
-- signed bearer authentication at the remote WebSocket proxy;
-- headless operation with Codex Apps disabled and Node.js available to bundled plugin MCP servers;
-- crash-safe branch, tag, pull-request ref, and commit-SHA workspace initialization;
-- Git and `gh` credentials read from the mounted token file on every invocation.
+| Credential | Where it is | Who can read it |
+| --- | --- | --- |
+| GitHub App installation token, limited to the environment's repository | `/var/run/edka/github/token` in `clone` and `codex` | Git, `gh` and every command Codex runs. Review environments mount it in `clone` only. |
+| OpenAI Project API key | `/var/run/edka/provider/token` in `codex-proxy` | `codex-proxy` only |
+| ChatGPT credential with the refresh token | The `<release>-codex-auth` Secret in your cluster. No container mounts it. | Edka, which refreshes it and writes the new tokens back to the Secret |
+| ChatGPT access token | Sent by `codex-proxy` to the Codex app-server | The `codex` container, where Codex also runs its commands. The token expires and the proxy fetches a new one. |
+| Connection secret | `/var/run/edka/ws/secret` in `codex-proxy` | `codex-proxy`, to check connection tokens |
+| Broker token, ChatGPT mode only | `/var/run/edka/broker/token` in `codex-proxy` | `codex-proxy`, to request access tokens from Edka |
 
-It runs as UID/GID `1000`, uses `/workspace` as the repository root, and stores writable runtime
-state under `/home/codex` and `/tmp`. Edka mounts the GitHub token into the environment container at
-`/var/run/edka/github/token` and the remote-auth secret into the proxy container at
-`/var/run/edka/ws/secret`.
+The proxy and the Git helpers read each credential file on every use, so a rotated Secret takes effect without a container restart. Edka replaces the GitHub token before it expires.
 
-Every mode runs the Codex app-server without remote authentication on loopback port `4501`. The
-authenticated proxy is the only container listening for remote WebSocket connections on port
-`4500`.
+The `codex` container drops `OPENAI_API_KEY` from its environment at start. The Git credential helper only answers for `https://github.com`.
 
-Every mode requires:
+## Connecting
 
-- `CODEX_AUTH_MODE`
-- `EDKA_CODEX_WS_SHARED_SECRET_FILE`
-- `EDKA_CODEX_WS_AUDIENCE`
+The proxy accepts a WebSocket on port `4500` with an `Authorization: Bearer <token>` header. The token is a JWT signed with HS256 using the connection secret, with issuer `edka`, the environment ID as audience, and an expiry. The proxy checks it when the connection opens.
 
-In `subscription` mode, the proxy additionally requires:
-
-- `EDKA_CODEX_BROKER_URL`
-- `EDKA_CODEX_BROKER_TOKEN_FILE`
-
-In `openai_api_key` mode, the proxy does not use the subscription broker. It additionally reads
-`EDKA_CODEX_PROVIDER_TOKEN_FILE` (default
-`/var/run/edka/provider/token`), listens on the fixed loopback address `127.0.0.1:4502`, and
-forwards only `/v1/responses` and `/v1/models` paths to the fixed OpenAI upstream:
-
-- `https://api.openai.com/v1`
-
-The OpenAI Project API key is mounted only into the proxy container at
-`/var/run/edka/provider/token`. The proxy reads that file for every provider request, replaces a
-constant non-secret marker bearer token, and never places the real key in the environment
-container's config, environment, arguments, or Codex auth file. This keeps the credential
-unavailable to commands executed by Codex and allows key rotation without rebuilding the
-environment.
-
-The environment config uses the custom `edka_openai` provider, requires Codex API-key
-authentication, and disables provider WebSockets. At startup, the environment records only a
-constant marker with `codex login --with-api-key`; that makes the remote TUI skip onboarding while
-all model traffic stays on the loopback HTTP proxy.
-
-Optional proxy settings are documented by `codex-proxy --help`.
-
-## Development
+Edka issues a token valid for 60 minutes when you select **Reveal Connection** on the environment. The attach command passes it to Codex:
 
 ```bash
-bash -n codex-env/*.sh codex-env/gh codex-env/git-askpass-edka \
-  codex-env/git-credential-edka
+codex --dangerously-bypass-approvals-and-sandbox --remote wss://<environment-endpoint> --remote-auth-token-env EDKA_CODEX_TOKEN
+```
+
+## Model credentials
+
+`CODEX_AUTH_MODE` picks one of two modes.
+
+### ChatGPT subscription (`subscription`)
+
+After the client's `initialize` request, the proxy signs the app-server in with an access token (`account/login/start` with type `chatgptAuthTokens`). When Codex asks for a new one (`account/chatgptAuthTokens/refresh`), the proxy requests it from Edka at `EDKA_CODEX_BROKER_URL`.
+
+Edka reads the ChatGPT credential from the Secret in your cluster. When the access token has less than 5 minutes left, Edka refreshes it with OpenAI and writes the new tokens back to the Secret. The proxy receives the access token only. If Edka is unreachable, the proxy keeps serving a cached token until 30 seconds before it expires and retries with a backoff of up to 30 seconds.
+
+### OpenAI Project API key (`openai_api_key`)
+
+The environment configures Codex with a model provider at `http://127.0.0.1:4502/v1` and signs it in with the placeholder key `edka-provider-proxy`. The proxy listens on that address, accepts only `/v1/responses` and `/v1/models`, puts the real key in place of the placeholder, and forwards the request to `https://api.openai.com/v1`.
+
+## Settings
+
+### `edka-codex-env`
+
+| Name | Value |
+| --- | --- |
+| `CODEX_AUTH_MODE` | `subscription` or `openai_api_key` |
+| `CODEX_MODEL` | Model for new sessions. Default: Codex's default. |
+| `CODEX_HOME` | Default: `/home/codex/.codex` |
+| `WORKSPACE_DIR` | Default: `/workspace` |
+| `GIT_USER_NAME`, `GIT_USER_EMAIL` | Commit identity. Default: `Edka Codex Agent`, `codex-env@noreply.edka.io` |
+| `GITHUB_TOKEN_FILE` | Default: `/var/run/edka/github/token` |
+
+The `clone` argument runs the clone step instead of Codex. It reads `GIT_REPOSITORY_URL` and `GIT_REF`. For a pull request review it also reads `GIT_PR_NUMBER`, with `GIT_REF` set to the commit to review, and `GIT_BASE_REF`.
+
+### `edka-codex-proxy`
+
+Each setting is also a flag. `codex-proxy --help` lists them.
+
+| Name | Value |
+| --- | --- |
+| `CODEX_AUTH_MODE` | `subscription` or `openai_api_key`. Default: `subscription` |
+| `EDKA_CODEX_WS_AUDIENCE` | Required. The audience every connection token must carry. |
+| `EDKA_CODEX_WS_SHARED_SECRET_FILE` | At least 32 bytes. Default: `/var/run/edka/ws/secret` |
+| `EDKA_CODEX_WS_ISSUER` | Default: `edka` |
+| `EDKA_CODEX_PROXY_ADDR` | Default: `:4500` |
+| `EDKA_CODEX_PROXY_UPSTREAM` | Default: `ws://127.0.0.1:4501` |
+| `EDKA_CODEX_BROKER_URL` | Required in `subscription` mode |
+| `EDKA_CODEX_BROKER_TOKEN_FILE` | Default: `/var/run/edka/broker/token` |
+| `EDKA_CODEX_PROVIDER_TOKEN_FILE` | Default: `/var/run/edka/provider/token` |
+
+## Versions
+
+A version is the Codex release and a revision of this repository, such as `0.160.0-edka.2`. Both images carry the same tag, and a published tag is never replaced. Each [GitHub release](https://github.com/edkadigital/edka-codex-runtime/releases) has a `bundle.json` with the digests of both images.
+
+[`runtime.env`](runtime.env) pins the Codex, Node.js and GitHub CLI versions, plus SHA-256 checksums for the Codex and GitHub CLI downloads. The build fails when a checksum does not match.
+
+A workflow runs every night at 03:00 UTC. When `openai/codex` has a newer stable release, it pins it with fresh checksums, runs CI and publishes `<codex-version>-edka.1`. A failed CI run leaves the `codex/bump-<version>` branch for inspection, and the next night retries. `.github/scripts/bump-codex.sh` runs the same logic locally.
+
+To release a change to this repository, increase the `edka` revision of `RUNTIME_VERSION` in `runtime.env`, merge it to `main`, and push the tag `v<RUNTIME_VERSION>`. The release workflow builds `linux/amd64` and `linux/arm64` on native runners.
+
+## Tests
+
+```bash
 codex-env/scripts_test.sh
 
 cd codex-proxy
-gofmt -d .
 go test ./...
 go vet ./...
 ```
 
-Docker validation requires a running daemon:
+To build the images locally:
 
 ```bash
-set -a
-source runtime.env
-set +a
+set -a; source runtime.env; set +a
 docker build \
   --build-arg "CODEX_VERSION=${CODEX_VERSION}" \
   --build-arg "NODE_VERSION=${NODE_VERSION}" \
@@ -99,31 +124,6 @@ docker build \
 docker build -t edka-codex-proxy:dev codex-proxy
 ```
 
-## Releasing
+## License
 
-1. Update `CODEX_VERSION` and the Codex checksums in `runtime.env`, plus compatibility tests, when
-   upgrading Codex.
-2. Bump `RUNTIME_VERSION`. Wrapper-only changes increment the `edka` revision.
-3. Merge the verified change to `main`.
-4. Source `runtime.env`, then create and push `v${RUNTIME_VERSION}`.
-
-Codex upgrades are automated. The `Update Codex` workflow runs nightly, pins the newest stable
-`rust-v` release from `openai/codex` with fresh checksums as `<codex-version>-edka.1`, pushes the
-bump to a `codex/bump-<codex-version>` branch, and runs CI on it. When CI passes it fast-forwards
-`main`, pushes the release tag, and runs the release workflow, waiting for it to finish so the update
-run fails when the release does. When CI fails the branch and the
-failed run stay behind for inspection, and the next nightly run retries. Run the workflow manually to
-pin a specific version or to preview a bump with `dry_run`. The same resolution logic is available
-locally:
-
-```bash
-.github/scripts/bump-codex.sh
-```
-
-The tag workflow builds both architectures on native runners, publishes both immutable bundle
-tags, updates `latest`, verifies that both GHCR packages are public, and creates one GitHub release
-with a `bundle.json` manifest. Existing immutable tags are never overwritten.
-
-GitHub creates new packages as private. After the first publish, an organization owner must make
-`edka-codex-env` and `edka-codex-proxy` public in their package settings. This is a one-time,
-irreversible action; rerun the release workflow after both packages are public.
+[MIT](LICENSE). The environment image also contains the Codex CLI (Apache 2.0), the GitHub CLI (MIT) and Node.js, each under its own license.
