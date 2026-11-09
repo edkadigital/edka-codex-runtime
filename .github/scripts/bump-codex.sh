@@ -46,15 +46,28 @@ if [[ -n "${CODEX_TARGET_VERSION:-}" ]]; then
 else
   # Upstream publishes many `-alpha` prereleases and separate python-v tags;
   # only stable `rust-v<semver>` releases are candidates.
-  target="$(
-    gh api "repos/${upstream_repo}/releases?per_page=100" \
-      --jq '.[]
-        | select(.draft == false and .prerelease == false)
-        | .tag_name
-        | select(test("^rust-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
-        | sub("^rust-v"; "")' |
-      sort -V | tail -n 1
-  )"
+  #
+  # per_page stays small on purpose: every openai/codex release carries about
+  # ten platform assets, and asking this endpoint for 100 of them at once makes
+  # it exceed its own timeout and answer HTTP 504 every single time. A page of
+  # 30 is served reliably and still spans several stable releases among the
+  # alphas. The retries cover a genuinely transient failure; gh has no --retry.
+  target=""
+  for attempt in $(seq 1 3); do
+    if target="$(
+      gh api "repos/${upstream_repo}/releases?per_page=30" \
+        --jq '.[]
+          | select(.draft == false and .prerelease == false)
+          | .tag_name
+          | select(test("^rust-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+          | sub("^rust-v"; "")' |
+        sort -V | tail -n 1
+    )" && [[ -n "${target}" ]]; then
+      break
+    fi
+    echo "Attempt ${attempt}/3 to resolve the newest stable ${upstream_repo} release failed" >&2
+    sleep 5
+  done
   if [[ -z "${target}" ]]; then
     echo "::error::No stable rust-v release found in ${upstream_repo}" >&2
     exit 1
